@@ -4,6 +4,7 @@ This document provides a comprehensive overview of TheRock's CI/CD workflow syst
 
 ## Table of Contents
 
+- [End-to-End Example: CI Nightly](#end-to-end-example-ci-nightly)
 - [Workflow Overview](#workflow-overview)
 - [Entry Point Workflows](#entry-point-workflows)
 - [Reusable Workflows](#reusable-workflows)
@@ -13,6 +14,126 @@ This document provides a comprehensive overview of TheRock's CI/CD workflow syst
 - [Test Configuration System](#test-configuration-system)
 - [Event-to-Test Coverage Mapping](#event-to-test-coverage-mapping)
 - [Runner Configuration](#runner-configuration)
+
+## End-to-End Example: CI Nightly
+
+This section walks through what happens when the **CI Nightly** workflow runs, from trigger to completion.
+
+### What Triggers It
+
+The nightly CI runs automatically at **2 AM UTC every day** via a cron schedule. You can also trigger it manually from the GitHub Actions UI using `workflow_dispatch`.
+
+### Step-by-Step Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         ci_nightly.yml                              │
+│                    (Entry Point Workflow)                           │
+└─────────────────────┬───────────────────────────────────────────────┘
+                      │
+                      ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  Step 1: Setup                                                      │
+│  ─────────────                                                      │
+│  Calls: setup.yml                                                   │
+│                                                                     │
+│  What it does:                                                      │
+│  • Runs configure_ci.py to determine which GPU families to build   │
+│  • For nightly: includes ALL families (presubmit + postsubmit +    │
+│    nightly families like gfx906, gfx908, gfx90a, etc.)             │
+│  • Outputs a matrix of build variants for Linux and Windows        │
+│  • Computes the ROCm package version                                │
+└─────────────────────┬───────────────────────────────────────────────┘
+                      │
+          ┌───────────┴───────────┐
+          ▼                       ▼
+┌──────────────────────┐  ┌──────────────────────┐
+│  Linux Builds        │  │  Windows Builds      │
+│  (one per GPU family)│  │  (one per GPU family)│
+└──────────┬───────────┘  └──────────┬───────────┘
+           │                         │
+           ▼                         ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  Step 2: Platform CI (runs in parallel for each GPU family)        │
+│  ───────────────────                                                │
+│  Calls: ci_linux.yml / ci_windows.yml                               │
+│                                                                     │
+│  Each platform CI workflow then runs these jobs in sequence:        │
+└─────────────────────┬───────────────────────────────────────────────┘
+                      │
+                      ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  Step 2a: Build Artifacts                                           │
+│  ────────────────────────                                           │
+│  Calls: build_portable_linux_artifacts.yml                          │
+│                                                                     │
+│  What it does:                                                      │
+│  • Compiles ROCm components (compiler, runtime, math libs, etc.)   │
+│  • Produces portable artifacts for the specified GPU family         │
+│  • Uploads artifacts to GitHub Actions storage                      │
+└─────────────────────┬───────────────────────────────────────────────┘
+                      │
+          ┌───────────┼───────────┐
+          ▼           ▼           ▼
+┌──────────────┐ ┌──────────┐ ┌──────────────┐
+│ Test         │ │ Build    │ │ Benchmarks   │
+│ Artifacts    │ │ Python   │ │ (nightly)    │
+└──────┬───────┘ └────┬─────┘ └──────────────┘
+       │              │
+       ▼              ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  Step 2b: Test Artifacts                                            │
+│  ───────────────────────                                            │
+│  Calls: test_artifacts.yml → test_component.yml                     │
+│                                                                     │
+│  What it does:                                                      │
+│  • Runs sanity checks first                                         │
+│  • Executes component tests (rocBLAS, MIOpen, HIP tests, etc.)     │
+│  • Tests run on actual GPU hardware matching the target family      │
+│  • For nightly: runs FULL test suite (not just smoke tests)        │
+└─────────────────────────────────────────────────────────────────────┘
+                      │
+                      ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  Step 2c: Build Python Packages                                     │
+│  ──────────────────────────────                                     │
+│  Calls: build_portable_linux_python_packages.yml                    │
+│                                                                     │
+│  What it does:                                                      │
+│  • Builds Python wheels for ROCm libraries                          │
+│  • Packages are versioned with the computed ROCm version            │
+└─────────────────────┬───────────────────────────────────────────────┘
+                      │
+                      ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  Step 2d: Test Python Wheels                                        │
+│  ───────────────────────────                                        │
+│  Calls: test_rocm_wheels.yml                                        │
+│                                                                     │
+│  What it does:                                                      │
+│  • Installs the built Python wheels                                 │
+│  • Runs import tests and basic functionality checks                 │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Key Configuration Files
+
+| File | Role |
+|------|------|
+| `amdgpu_family_matrix.py` | Defines which GPU families exist and their test runners |
+| `configure_ci.py` | Decides which families to build based on the trigger event |
+| `fetch_test_configurations.py` | Determines which tests to run for each component |
+
+### Summary
+
+The CI Nightly workflow:
+
+1. **Starts** at 2 AM UTC (or manually)
+2. **Configures** the build matrix for all GPU families
+3. **Builds** ROCm artifacts for each GPU family in parallel
+4. **Tests** the artifacts on real GPU hardware
+5. **Builds** Python packages from the artifacts
+6. **Tests** the Python wheels
 
 ## Workflow Overview
 
