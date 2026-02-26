@@ -40,94 +40,160 @@ The nightly CI runs automatically at **2 AM UTC every day** via a cron schedule.
 ### Step-by-Step Flow
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         ci_nightly.yml                              │
-│                    (Entry Point Workflow)                           │
-└─────────────────────┬───────────────────────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│  Step 1: Setup                                                      │
-│  ─────────────                                                      │
-│  Calls: setup.yml                                                   │
-│                                                                     │
-│  What it does:                                                      │
-│  • Runs configure_ci.py to determine which GPU families to build   │
-│  • For nightly: includes ALL families (presubmit + postsubmit +    │
-│    nightly families like gfx906, gfx908, gfx90a, etc.)             │
-│  • Outputs a matrix of build variants for Linux and Windows        │
-│  • Computes the ROCm package version                                │
-└─────────────────────┬───────────────────────────────────────────────┘
-                      │
-          ┌───────────┴───────────┐
-          ▼                       ▼
-┌──────────────────────┐  ┌──────────────────────┐
-│  Linux Builds        │  │  Windows Builds      │
-│  (one per GPU family)│  │  (one per GPU family)│
-└──────────┬───────────┘  └──────────┬───────────┘
-           │                         │
-           ▼                         ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│  Step 2: Platform CI (runs in parallel for each GPU family)        │
-│  ───────────────────                                                │
-│  Calls: ci_linux.yml / ci_windows.yml                               │
-│                                                                     │
-│  Each platform CI workflow then runs these jobs in sequence:        │
-└─────────────────────┬───────────────────────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│  Step 2a: Build Artifacts                                           │
-│  ────────────────────────                                           │
-│  Calls: build_portable_linux_artifacts.yml                          │
-│                                                                     │
-│  What it does:                                                      │
-│  • Compiles ROCm components (compiler, runtime, math libs, etc.)   │
-│  • Produces portable artifacts for the specified GPU family         │
-│  • Uploads artifacts to GitHub Actions storage                      │
-└─────────────────────┬───────────────────────────────────────────────┘
-                      │
-          ┌───────────┼───────────┐
-          ▼           ▼           ▼
-┌──────────────┐ ┌──────────┐ ┌──────────────┐
-│ Test         │ │ Build    │ │ Benchmarks   │
-│ Artifacts    │ │ Python   │ │ (nightly)    │
-└──────┬───────┘ └────┬─────┘ └──────────────┘
-       │              │
-       ▼              ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│  Step 2b: Test Artifacts                                            │
-│  ───────────────────────                                            │
-│  Calls: test_artifacts.yml → test_component.yml                     │
-│                                                                     │
-│  What it does:                                                      │
-│  • Runs sanity checks first                                         │
-│  • Executes component tests (rocBLAS, MIOpen, HIP tests, etc.)     │
-│  • Tests run on actual GPU hardware matching the target family      │
-│  • For nightly: runs FULL test suite (not just smoke tests)        │
-└─────────────────────────────────────────────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│  Step 2c: Build Python Packages                                     │
-│  ──────────────────────────────                                     │
-│  Calls: build_portable_linux_python_packages.yml                    │
-│                                                                     │
-│  What it does:                                                      │
-│  • Builds Python wheels for ROCm libraries                          │
-│  • Packages are versioned with the computed ROCm version            │
-└─────────────────────┬───────────────────────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│  Step 2d: Test Python Wheels                                        │
-│  ───────────────────────────                                        │
-│  Calls: test_rocm_wheels.yml                                        │
-│                                                                     │
-│  What it does:                                                      │
-│  • Installs the built Python wheels                                 │
-│  • Runs import tests and basic functionality checks                 │
-└─────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                              ci_nightly.yml                                  │
+│                         (Entry Point Workflow)                               │
+└─────────────────────────────────┬────────────────────────────────────────────┘
+                                  │
+                                  ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  STEP 1: SETUP (setup.yml)                                                   │
+│  ─────────────────────────                                                   │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐     │
+│  │  configure_ci.py                                                    │     │
+│  │  Reads: amdgpu_family_matrix.py                                     │     │
+│  │                                                                     │     │
+│  │  For nightly (schedule event):                                      │     │
+│  │  • Selects ALL GPU families:                                        │     │
+│  │    - Presubmit: gfx94x, gfx110x, gfx1151, gfx120x                   │     │
+│  │    - Postsubmit: gfx950                                             │     │
+│  │    - Nightly: gfx906, gfx908, gfx90a, gfx101x, gfx103x, gfx115x     │     │
+│  │  • Sets test_type = "full" (all shards)                             │     │
+│  └─────────────────────────────────────────────────────────────────────┘     │
+│                                  │                                           │
+│                                  ▼                                           │
+│  Output: JSON matrix of GPU families for Linux and Windows                   │
+│  Example: ["gfx94x", "gfx950", "gfx906", "gfx908", ...]                      │
+└─────────────────────────────────┬────────────────────────────────────────────┘
+                                  │
+              ┌───────────────────┴───────────────────┐
+              ▼                                       ▼
+┌───────────────────────────┐           ┌───────────────────────────┐
+│  Linux Builds             │           │  Windows Builds           │
+│  (one job per GPU family) │           │  (one job per GPU family) │
+│                           │           │                           │
+│  gfx94x  ─┐               │           │  gfx110x ─┐               │
+│  gfx950  ─┼─► parallel    │           │  gfx1151 ─┼─► parallel    │
+│  gfx906  ─┤               │           │  gfx120x ─┘               │
+│  gfx908  ─┤               │           │                           │
+│  ...     ─┘               │           │                           │
+└─────────────┬─────────────┘           └─────────────┬─────────────┘
+              │                                       │
+              └───────────────────┬───────────────────┘
+                                  │
+                                  ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  STEP 2: PLATFORM CI (ci_linux.yml / ci_windows.yml)                         │
+│  ───────────────────────────────────────────────────                         │
+│  Runs for EACH GPU family in parallel. Below shows one family's flow:        │
+└─────────────────────────────────┬────────────────────────────────────────────┘
+                                  │
+                                  ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  STEP 2a: BUILD ARTIFACTS (build_portable_linux_artifacts.yml)               │
+│  ─────────────────────────────────────────────────────────────               │
+│                                                                              │
+│  • Compiles ROCm components (compiler, runtime, math libs, etc.)             │
+│  • Target GPU family passed from matrix (e.g., gfx94X-dcgpu)                 │
+│  • Uploads artifacts to GitHub Actions storage                               │
+└─────────────────────────────────┬────────────────────────────────────────────┘
+                                  │
+          ┌───────────────────────┼───────────────────────┐
+          ▼                       ▼                       ▼
+┌──────────────────┐   ┌──────────────────┐   ┌──────────────────┐
+│ Test Artifacts   │   │ Build Python     │   │ Benchmarks       │
+│                  │   │ Packages         │   │ (nightly only)   │
+└────────┬─────────┘   └────────┬─────────┘   └────────┬─────────┘
+         │                      │                      │
+         ▼                      ▼                      ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  STEP 2b: TEST ARTIFACTS (test_artifacts.yml)                                │
+│  ────────────────────────────────────────────                                │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐     │
+│  │  fetch_test_configurations.py                                       │     │
+│  │  Reads: test_matrix (from fetch_test_configurations.py)             │     │
+│  │                                                                     │     │
+│  │  Input:                                                             │     │
+│  │  • AMDGPU_FAMILIES = "gfx94X-dcgpu"                                 │     │
+│  │  • RUNNER_OS = "Linux"                                              │     │
+│  │  • TEST_TYPE = "full"                                               │     │
+│  │                                                                     │     │
+│  │  Processing:                                                        │     │
+│  │  • Filters tests by platform (Linux/Windows)                        │     │
+│  │  • Excludes tests not supported on this GPU family                  │     │
+│  │  • For full tests: uses all shards (hip-tests → 4 shards)          │     │
+│  │  • For smoke tests: uses 1 shard only                               │     │
+│  └─────────────────────────────────────────────────────────────────────┘     │
+│                                  │                                           │
+│                                  ▼                                           │
+│  Output: JSON list of test jobs                                              │
+│  Example: [                                                                  │
+│    {"job_name": "hip-tests", "shard_arr": [1,2,3,4], ...},                   │
+│    {"job_name": "rocblas", "shard_arr": [1], ...},                           │
+│    {"job_name": "miopen", "shard_arr": [1,2,3,4], ...},                      │
+│    ...                                                                       │
+│  ]                                                                           │
+└─────────────────────────────────┬────────────────────────────────────────────┘
+                                  │
+                                  ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  STEP 2c: TEST EXECUTION (test_component.yml)                                │
+│  ────────────────────────────────────────────                                │
+│                                                                              │
+│  For each test in the matrix, runs in parallel:                              │
+│                                                                              │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐             │
+│  │ hip-tests   │ │ hip-tests   │ │ hip-tests   │ │ hip-tests   │             │
+│  │ shard 1/4   │ │ shard 2/4   │ │ shard 3/4   │ │ shard 4/4   │             │
+│  └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘             │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐             │
+│  │ rocblas     │ │ miopen 1/4  │ │ miopen 2/4  │ │ miopen 3/4  │  ...        │
+│  └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘             │
+│                                                                              │
+│  Each test job:                                                              │
+│  • Downloads artifacts for this GPU family                                   │
+│  • Runs on GPU runner (from amdgpu_family_matrix.py test-runs-on)           │
+│  • Executes test_script (e.g., python test_rocblas.py)                       │
+│  • Reports pass/fail                                                         │
+└─────────────────────────────────┬────────────────────────────────────────────┘
+                                  │
+                                  ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  STEP 2d: BENCHMARKS (test_benchmarks.yml) - Nightly Only                    │
+│  ────────────────────────────────────────────────────────                    │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐     │
+│  │  fetch_test_configurations.py (with IS_BENCHMARK_WORKFLOW=true)     │     │
+│  │  Reads: benchmark_matrix (from benchmark_test_matrix.py)            │     │
+│  │                                                                     │     │
+│  │  Selects benchmarks: rocblas_bench, hipblaslt_bench,                │     │
+│  │                      rocsolver_bench, rocrand_bench, rocfft_bench   │     │
+│  └─────────────────────────────────────────────────────────────────────┘     │
+│                                                                              │
+│  • Runs on benchmark-runs-on runners (usually multi-GPU machines)            │
+│  • No sharding (benchmarks always run as single job)                         │
+│  • Measures performance metrics                                              │
+└─────────────────────────────────┬────────────────────────────────────────────┘
+                                  │
+                                  ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  STEP 2e: BUILD PYTHON PACKAGES (build_portable_linux_python_packages.yml)   │
+│  ─────────────────────────────────────────────────────────────────────────   │
+│                                                                              │
+│  • Builds Python wheels for ROCm libraries                                   │
+│  • Packages versioned with computed ROCm version                             │
+└─────────────────────────────────┬────────────────────────────────────────────┘
+                                  │
+                                  ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  STEP 2f: TEST PYTHON WHEELS (test_rocm_wheels.yml)                          │
+│  ──────────────────────────────────────────────────                          │
+│                                                                              │
+│  • Installs built Python wheels                                              │
+│  • Runs import tests and basic functionality checks                          │
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Understanding Event Types
