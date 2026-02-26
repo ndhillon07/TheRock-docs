@@ -96,7 +96,7 @@ The nightly CI runs automatically at **2 AM UTC every day** via a cron schedule.
 │                                                                              │
 │  • Compiles ROCm components (compiler, runtime, math libs, etc.)             │
 │  • Target GPU family passed from matrix (e.g., gfx94X-dcgpu)                 │
-│  • Uploads artifacts to GitHub Actions storage                               │
+│  • Uploads artifacts to S3 (therock-ci-artifacts bucket)                     │
 └─────────────────────────────────┬────────────────────────────────────────────┘
                                   │
           ┌───────────────────────┼───────────────────────┐
@@ -450,7 +450,7 @@ Here's the complete flow from trigger to test execution:
 │                                                                          │
 │     GitHub Actions expands matrix → parallel jobs                        │
 │     Each job builds ROCm for one GPU family                              │
-│     Artifacts uploaded to GitHub Actions storage                         │
+│     Artifacts uploaded to S3 (therock-ci-artifacts bucket)               │
 └───────────────────────────────────┬──────────────────────────────────────┘
                                     ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
