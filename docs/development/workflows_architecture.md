@@ -19,6 +19,20 @@ This document provides a comprehensive overview of TheRock's CI/CD workflow syst
 
 This section walks through what happens when the **CI Nightly** workflow runs, from trigger to completion.
 
+### Key Files Referenced
+
+Before diving in, here are the key configuration files this workflow uses:
+
+| File | Purpose |
+|------|---------|
+| [`.github/workflows/ci_nightly.yml`](../../.github/workflows/ci_nightly.yml) | Entry point workflow |
+| [`.github/workflows/setup.yml`](../../.github/workflows/setup.yml) | Matrix generation workflow |
+| [`.github/workflows/ci_linux.yml`](../../.github/workflows/ci_linux.yml) | Linux build/test orchestration |
+| [`build_tools/github_actions/amdgpu_family_matrix.py`](../../build_tools/github_actions/amdgpu_family_matrix.py) | GPU family definitions (which GPUs to build for) |
+| [`build_tools/github_actions/configure_ci.py`](../../build_tools/github_actions/configure_ci.py) | Selects GPU families based on trigger event |
+| [`build_tools/github_actions/fetch_test_configurations.py`](../../build_tools/github_actions/fetch_test_configurations.py) | Test definitions (which tests to run) |
+| [`tests/extended_tests/benchmark/benchmark_test_matrix.py`](../../tests/extended_tests/benchmark/benchmark_test_matrix.py) | Benchmark definitions |
+
 ### What Triggers It
 
 The nightly CI runs automatically at **2 AM UTC every day** via a cron schedule. You can also trigger it manually from the GitHub Actions UI using `workflow_dispatch`.
@@ -130,40 +144,68 @@ TheRock CI uses three event categories that determine **which GPU families are b
 
 ### How the GPU Matrix Is Created
 
-The GPU family matrix is defined in [`build_tools/github_actions/amdgpu_family_matrix.py`](../../build_tools/github_actions/amdgpu_family_matrix.py). This file is the **source of truth** for which GPUs exist and how to test them.
+> **Source file:** [`build_tools/github_actions/amdgpu_family_matrix.py`](../../build_tools/github_actions/amdgpu_family_matrix.py)
 
-**Step 1: Define GPU families in Python dictionaries**
+This file is the **source of truth** for which GPUs exist and how to test them. It contains three dictionaries, one for each event type:
+
+**Presubmit families** (`amdgpu_family_info_matrix_presubmit`) - run on every PR:
 
 ```python
-# Presubmit families (run on every PR)
+# From amdgpu_family_matrix.py lines 52-130
 amdgpu_family_info_matrix_presubmit = {
     "gfx94x": {
         "linux": {
-            "test-runs-on": "linux-mi325-1gpu-ossci-rocm",  # Which machine runs tests
-            "family": "gfx94X-dcgpu",                        # CMake target name
-            "fetch-gfx-targets": ["gfx942"],                 # Specific GPU chips
-            "build_variants": ["release", "asan", "tsan"],   # Build configurations
+            "test-runs-on": "linux-mi325-1gpu-ossci-rocm",    # Runner for tests
+            "test-runs-on-sandbox": "linux-mi325-8gpu-ossci-rocm-sandbox",  # ASAN runner
+            "test-runs-on-multi-gpu": "linux-mi325-8gpu-ossci-rocm",        # Multi-GPU tests
+            "benchmark-runs-on": "linux-mi325-8gpu-ossci-rocm",             # Benchmarks
+            "family": "gfx94X-dcgpu",                          # CMake target name
+            "fetch-gfx-targets": ["gfx942"],                   # Specific GPU chips
+            "build_variants": ["release", "asan", "tsan"],     # Build configurations
         }
     },
-    # ... more families
-}
-
-# Postsubmit families (run on pushes to main, in addition to presubmit)
-amdgpu_family_info_matrix_postsubmit = {
-    "gfx950": { ... }
-}
-
-# Nightly families (run on schedule, in addition to presubmit + postsubmit)
-amdgpu_family_info_matrix_nightly = {
-    "gfx906": { ... },
-    "gfx908": { ... },
-    # ... older/experimental GPUs
+    "gfx110x": {
+        "linux": { "family": "gfx110X-all", ... },
+        "windows": { "test-runs-on": "windows-gfx110X-gpu-rocm", ... },
+    },
+    "gfx1151": { ... },
+    "gfx120x": { ... },
 }
 ```
 
-**Step 2: `configure_ci.py` selects families based on the trigger**
+**Postsubmit families** (`amdgpu_family_info_matrix_postsubmit`) - added on pushes to main:
 
-When CI runs, `configure_ci.py` looks at the GitHub event type and selects the appropriate families:
+```python
+# From amdgpu_family_matrix.py lines 132-142
+amdgpu_family_info_matrix_postsubmit = {
+    "gfx950": {
+        "linux": {
+            "test-runs-on": "linux-mi355-1gpu-ossci-rocm",
+            "family": "gfx950-dcgpu",
+            "fetch-gfx-targets": ["gfx950"],
+            "build_variants": ["release", "asan", "tsan"],
+        }
+    },
+}
+```
+
+**Nightly families** (`amdgpu_family_info_matrix_nightly`) - added on scheduled runs:
+
+```python
+# From amdgpu_family_matrix.py lines 144-281
+amdgpu_family_info_matrix_nightly = {
+    "gfx906": { ... },   # Older datacenter GPU
+    "gfx908": { ... },   # MI100
+    "gfx90a": { ... },   # MI200 series
+    "gfx101x": { ... },  # RDNA1
+    "gfx103x": { ... },  # RDNA2
+    "gfx1150": { ... },  # Strix Point
+    "gfx1152": { ... },
+    "gfx1153": { ... },
+}
+```
+
+**How families are selected** ([`configure_ci.py`](../../build_tools/github_actions/configure_ci.py)):
 
 ```
 pull_request  → presubmit families only
@@ -171,67 +213,123 @@ push to main  → presubmit + postsubmit families
 schedule      → presubmit + postsubmit + nightly families (ALL)
 ```
 
-**Step 3: Matrix is output to GitHub Actions**
+**Matrix output to GitHub Actions:**
 
 The selected families become a JSON matrix that GitHub Actions expands into parallel jobs—one build per GPU family.
 
 ### How the Test Matrix Is Created
 
-Tests are defined separately from GPU families in [`build_tools/github_actions/fetch_test_configurations.py`](../../build_tools/github_actions/fetch_test_configurations.py). This file lists **what tests exist** and **how to run them**.
+> **Source file:** [`build_tools/github_actions/fetch_test_configurations.py`](../../build_tools/github_actions/fetch_test_configurations.py)
 
-**Step 1: Define tests in a Python dictionary**
+This file defines the `test_matrix` dictionary listing **what tests exist** and **how to run them**.
+
+**Test matrix structure** (from `fetch_test_configurations.py` lines 35-332):
 
 ```python
 test_matrix = {
+    # HIP core tests - split into 4 shards for parallelism
+    "hip-tests": {
+        "job_name": "hip-tests",
+        "fetch_artifact_args": "--tests",
+        "timeout_minutes": 120,
+        "test_script": "python build_tools/github_actions/test_executable_scripts/test_hiptests.py",
+        "platform": ["linux", "windows"],
+        "total_shards": 4,  # Runs as 4 parallel jobs
+    },
+
+    # BLAS tests
     "rocblas": {
         "job_name": "rocblas",
-        "fetch_artifact_args": "--blas --tests",    # Which artifacts to download
+        "fetch_artifact_args": "--blas --tests",
         "timeout_minutes": 15,
-        "test_script": "python .../test_rocblas.py", # Script that runs the test
-        "platform": ["linux", "windows"],            # Supported platforms
-        "total_shards": 1,                           # Parallelism (split large tests)
-        "exclude_family": {                          # Skip on certain GPUs
-            "linux": ["gfx1150", "gfx1151"],
+        "test_script": "python build_tools/github_actions/test_executable_scripts/test_rocblas.py",
+        "platform": ["linux", "windows"],
+        "total_shards": 1,
+    },
+
+    # Test with family exclusions
+    "rocroller": {
+        "job_name": "rocroller",
+        "platform": ["linux"],
+        "total_shards": 5,
+        "exclude_family": {
+            "linux": ["gfx1150", "gfx1151", "gfx1152", "gfx1153"],  # Not supported
         },
     },
-    "hip-tests": {
-        "total_shards": 4,  # Split into 4 parallel jobs for speed
-        ...
-    },
+
+    # Multi-GPU test (requires special runner)
     "rccl": {
-        "multi_gpu": {"linux": ["gfx94X-dcgpu"]},  # Requires multi-GPU runner
-        ...
+        "job_name": "rccl",
+        "platform": ["linux"],
+        "total_shards": 1,
+        "multi_gpu": {"linux": ["gfx94X-dcgpu"]},  # Only families with multi-GPU hardware
     },
+
+    # ... 25+ more test definitions for miopen, rocfft, rocsparse, etc.
 }
 ```
 
-**Step 2: `fetch_test_configurations.py` filters tests at runtime**
+**Available tests in the matrix:**
 
-When tests run, the script:
-1. Checks the current platform (Linux or Windows)
-2. Checks the GPU family being tested
-3. Excludes tests that don't support that platform/family
-4. Applies sharding based on test type (smoke vs full)
+| Category | Tests |
+|----------|-------|
+| Core | hip-tests |
+| BLAS | rocblas, hipblas, hipblaslt, rocroller |
+| Solver | rocsolver, hipsolver |
+| Sparse | rocsparse, hipsparse, hipsparselt |
+| Primitives | rocprim, hipcub, rocthrust |
+| FFT | rocfft, hipfft |
+| Random | rocrand, hiprand |
+| ML/DNN | miopen, hipdnn, miopenprovider, hipblasltprovider |
+| Communication | rccl |
+| Hardware | rocwmma, libhipcxx_hipcc, libhipcxx_hiprtc |
+| Tools | rocprofiler_systems, aqlprofile, rocrtst, rocr-debug-agent |
 
-**Step 3: Smoke vs Full tests**
+**How tests are filtered at runtime:**
 
-| Test Type | When Used | Shards |
-|-----------|-----------|--------|
-| **Smoke** | PRs, quick validation | 1 shard only (fast) |
-| **Full** | Nightly, submodule changes | All shards (comprehensive) |
+The `fetch_test_configurations.py` script runs during CI and filters the matrix:
 
-For example, `hip-tests` has 4 shards. In smoke mode, only shard 1 runs. In full mode, all 4 run in parallel.
+```python
+# Simplified logic from fetch_test_configurations.py
+for test in test_matrix:
+    # Skip if platform doesn't match
+    if platform not in test["platform"]:
+        continue
+
+    # Skip if this GPU family is excluded
+    if gpu_family in test.get("exclude_family", {}).get(platform, []):
+        continue
+
+    # Apply sharding based on test type
+    if test_type == "smoke":
+        test["total_shards"] = 1  # Only run 1 shard for quick validation
+    # else: use all shards for full testing
+```
+
+**Smoke vs Full tests:**
+
+| Test Type | When Used | Shards | Purpose |
+|-----------|-----------|--------|---------|
+| **Smoke** | PRs, quick validation | 1 shard only | Fast feedback (~minutes) |
+| **Full** | Nightly, submodule changes | All shards | Comprehensive coverage (~hours) |
+
+Example: `hip-tests` has 4 shards. In smoke mode, only shard 1 runs. In full mode, all 4 run in parallel.
 
 ### How the Benchmark Matrix Works
 
-Benchmarks are **separate from regular tests** and only run on nightly builds. They're defined in [`tests/extended_tests/benchmark/benchmark_test_matrix.py`](../../tests/extended_tests/benchmark/benchmark_test_matrix.py).
+> **Source file:** [`tests/extended_tests/benchmark/benchmark_test_matrix.py`](../../tests/extended_tests/benchmark/benchmark_test_matrix.py)
+
+Benchmarks are **separate from regular tests** and only run on nightly builds.
+
+**Benchmark matrix** (from `benchmark_test_matrix.py` lines 22-92):
 
 ```python
 benchmark_matrix = {
     "rocblas_bench": {
         "job_name": "rocblas_bench",
+        "fetch_artifact_args": "--blas --tests",
         "timeout_minutes": 90,
-        "test_script": "python .../test_rocblas_benchmark.py",
+        "test_script": "python tests/extended_tests/benchmark/scripts/test_rocblas_benchmark.py",
         "platform": ["linux"],
         "total_shards": 1,  # Benchmarks don't shard
     },
