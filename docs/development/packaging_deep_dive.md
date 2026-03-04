@@ -50,7 +50,7 @@ TheRock produces three main package types, all from the same build:
 |---|---|---|---|
 | **Python Wheels** | pip | Linux, Windows | `pip install rocm[libraries]` |
 | **Native Linux** | apt / yum | Linux only | `apt install rocm` |
-| **Windows Installers** | (future) | Windows only | (not yet implemented) |
+| **Windows Packages** | pip | Windows only | `pip install rocm-sdk-core` |
 
 **Key insight:** All three are built from the same source and produce functionally equivalent ROCm installations. The difference is just the delivery mechanism.
 
@@ -116,7 +116,7 @@ Here's how CI builds and packages TheRock every night:
 │ S3 DISTRIBUTION STORAGE                                     │
 │ ├── Python wheels (therock-nightly-python/)                │
 │ ├── Native packages (therock-nightly-packages/)            │
-│ └── Windows packages (future)                               │
+│ └── Windows Python packages (therock-nightly-python/)      │
 └────────────────────────┬────────────────────────────────────┘
                          │
                          │ CloudFront CDN
@@ -3418,18 +3418,26 @@ S3 buckets are fronted by CloudFront (AWS's CDN) for fast global access:
 
 ### URL Structure
 
-**Python packages:**
+**Python packages (Linux and Windows):**
 
 ```
-# Nightly
+# Nightly (Linux)
 https://rocm.nightlies.amd.com/v2/gfx94X-dcgpu/index.html
 
-# Dev
+# Nightly (Windows)
+https://rocm.nightlies.amd.com/v2/gfx1151/index.html
+
+# Dev (Linux)
 https://rocm.devreleases.amd.com/v2/gfx94X-dcgpu/index.html
+
+# Dev (Windows)
+https://rocm.devreleases.amd.com/v2/gfx1151/index.html
 
 # Prerelease
 https://rocm.prereleases.amd.com/whl/index.html
 ```
+
+**Note:** Both Linux and Windows Python wheels are uploaded to the same S3 buckets (`therock-{nightly|dev|prerelease}-python`), just in different subdirectories based on GPU family.
 
 **Distribution Tarballs:**
 
