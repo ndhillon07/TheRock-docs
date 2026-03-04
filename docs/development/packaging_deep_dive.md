@@ -158,9 +158,27 @@ ROCm has dozens of components (compilers, libraries, tools). BUILD_TOPOLOGY.toml
 
 **Format:** TOML (Tom's Obvious Minimal Language) - a simple config file format
 
-### How BUILD_TOPOLOGY.toml is Processed
+### Who Reads BUILD_TOPOLOGY.toml? (Critical Distinction!)
 
-This is the critical part: **BUILD_TOPOLOGY.toml is NOT read directly by CMake**. Instead:
+**BUILD_TOPOLOGY.toml is read by TWO completely different systems:**
+
+1. **CMake** (via `topology_to_cmake.py`) - Generates build targets for local builds
+2. **GitHub Actions** (via `configure_ci.py`) - Creates parallel CI jobs
+
+**These do completely different things!** Let's be very clear:
+
+| System | What It Does | When | Input | Output |
+|---|---|---|---|---|
+| **CMake** | Builds software on ONE machine | When you run `cmake -B build` | BUILD_TOPOLOGY.toml | CMake targets, feature flags |
+| **GitHub Actions** | Orchestrates MULTIPLE build machines | When CI runs | BUILD_TOPOLOGY.toml + amdgpu_family_matrix.py | Parallel CI jobs |
+
+**Key insight:**
+- **CMake doesn't create parallel jobs** - it just builds what you tell it
+- **GitHub Actions creates parallel jobs** - it reads the topology and spawns multiple CMake builds
+
+### How CMake Processes BUILD_TOPOLOGY.toml
+
+**This happens on YOUR machine when you configure:**
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -220,6 +238,124 @@ This is the critical part: **BUILD_TOPOLOGY.toml is NOT read directly by CMake**
 ```
 
 **Key insight:** BUILD_TOPOLOGY.toml is a data file, not a build script. Python reads it once at configure time and translates it to CMake code.
+
+### How GitHub Actions Processes BUILD_TOPOLOGY.toml
+
+**This happens in CI when code is pushed to GitHub:**
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ STEP 1: GitHub Actions Workflow Starts                      │
+│ (e.g., when you push code or create a PR)                   │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ↓
+┌─────────────────────────────────────────────────────────────┐
+│ STEP 2: Setup Job Runs                                      │
+│                                                              │
+│   - name: Configuring CI options                            │
+│     run: ./build_tools/github_actions/configure_ci.py       │
+│                                                              │
+│ This Python script:                                          │
+│   1. Reads BUILD_TOPOLOGY.toml                              │
+│   2. Reads build_tools/github_actions/amdgpu_family_matrix.py│
+│   3. Determines which GPU families to build                 │
+│   4. Creates a JSON matrix of build jobs                    │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ↓
+┌─────────────────────────────────────────────────────────────┐
+│ STEP 3: Matrix Output (Example for nightly build)           │
+│                                                              │
+│ linux_variants: [                                           │
+│   {family: "gfx94X-dcgpu", variant: "release"},             │
+│   {family: "gfx1100", variant: "release"},                  │
+│   {family: "gfx950-dcgpu", variant: "release"}              │
+│ ]                                                            │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ↓
+┌─────────────────────────────────────────────────────────────┐
+│ STEP 4: GitHub Actions Creates Multiple Jobs                │
+│                                                              │
+│   build:                                                     │
+│     strategy:                                                │
+│       matrix: ${{ fromJson(needs.setup.outputs.linux_variants) }}│
+│                                                              │
+│ This creates 3 independent CI jobs:                         │
+│   - Job 1: family=gfx94X-dcgpu   (Machine A in Azure)       │
+│   - Job 2: family=gfx1100         (Machine B in Azure)       │
+│   - Job 3: family=gfx950-dcgpu   (Machine C in Azure)       │
+│                                                              │
+│ All run SIMULTANEOUSLY on different machines!               │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ↓
+┌─────────────────────────────────────────────────────────────┐
+│ STEP 5: Each Job Runs CMake Independently                   │
+│                                                              │
+│ Machine A:                                                   │
+│   cmake -B build -DTHEROCK_AMDGPU_FAMILIES=gfx94X-dcgpu     │
+│   ninja -C build                                             │
+│                                                              │
+│ Machine B (at the same time):                               │
+│   cmake -B build -DTHEROCK_AMDGPU_FAMILIES=gfx1100          │
+│   ninja -C build                                             │
+│                                                              │
+│ Machine C (at the same time):                               │
+│   cmake -B build -DTHEROCK_AMDGPU_FAMILIES=gfx950-dcgpu     │
+│   ninja -C build                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**The actual Python scripts:**
+
+```python
+# build_tools/github_actions/configure_ci.py
+# This reads BUILD_TOPOLOGY.toml and amdgpu_family_matrix.py
+
+from amdgpu_family_matrix import get_all_families_for_trigger_types
+
+# Get GPU families from amdgpu_family_matrix.py
+families = get_all_families_for_trigger_types(...)
+
+# For each family, create a matrix entry
+linux_variants = []
+for family in families:
+    linux_variants.append({
+        "family": family,
+        "variant": "release"
+    })
+
+# Output as JSON for GitHub Actions
+print(f"linux_variants={json.dumps(linux_variants)}")
+```
+
+```python
+# build_tools/github_actions/amdgpu_family_matrix.py
+# This is a Python dictionary, NOT from BUILD_TOPOLOGY.toml!
+
+amdgpu_family_info_matrix_presubmit = {
+    "gfx94x": {
+        "linux": {
+            "test-runs-on": "linux-mi325-1gpu-ossci-rocm",
+            "family": "gfx94X-dcgpu",  # ← This is what gets passed to CMake!
+            "fetch-gfx-targets": ["gfx942"],
+            "build_variants": ["release", "asan", "tsan"],
+        }
+    },
+    "gfx110x": {
+        "linux": {
+            "family": "gfx110X-all",
+            "fetch-gfx-targets": ["gfx1100"],
+        }
+    },
+}
+```
+
+**Critical point:** The GPU families (gfx94X-dcgpu, gfx1100, etc.) come from `amdgpu_family_matrix.py`, NOT from BUILD_TOPOLOGY.toml!
+
+**BUILD_TOPOLOGY.toml only says `type = "per-arch"`** - it doesn't list which GPUs. GitHub Actions reads that and says "okay, I need to create one job per GPU family from my matrix."
 
 ### The 4-Level Hierarchy
 
@@ -580,19 +716,37 @@ math-libs stage builds:
 **What happens in CI with per-arch:**
 
 ```
-User configures nightly build for 3 GPU families: gfx94X, gfx1100, gfx950
+GitHub Actions nightly workflow specifies which GPU families to build
+(configured in build_tools/github_actions/amdgpu_family_matrix.py):
+
+amdgpu_family_info_matrix_nightly = {
+    "gfx94x": {..., "family": "gfx94X-dcgpu"},
+    "gfx110x": {..., "family": "gfx1100"},
+    "gfx950": {..., "family": "gfx950-dcgpu"},
+}
 
 BUILD_TOPOLOGY.toml says:
   [build_stages.math-libs]
-  type = "per-arch"
+  type = "per-arch"  ← This tells GitHub Actions to multiply jobs!
 
-CI automatically creates 3 parallel jobs:
-  Job 1: Build math-libs for gfx94X
-  Job 2: Build math-libs for gfx1100  (runs simultaneously!)
-  Job 3: Build math-libs for gfx950   (runs simultaneously!)
+GitHub Actions configure_ci.py script:
+  1. Sees type = "per-arch" in BUILD_TOPOLOGY.toml
+  2. Reads GPU families from amdgpu_family_matrix.py
+  3. Creates one job per family
+
+Result: 3 parallel CI jobs created:
+  Job 1: cmake -DTHEROCK_AMDGPU_FAMILIES=gfx94X-dcgpu (Machine A)
+  Job 2: cmake -DTHEROCK_AMDGPU_FAMILIES=gfx1100 (Machine B, runs simultaneously!)
+  Job 3: cmake -DTHEROCK_AMDGPU_FAMILIES=gfx950-dcgpu (Machine C, runs simultaneously!)
 
 Instead of 12 hours sequential, takes 4 hours parallel!
 ```
+
+**Remember:**
+- **BUILD_TOPOLOGY.toml** says `type = "per-arch"` (the signal)
+- **amdgpu_family_matrix.py** says which GPUs exist (the list)
+- **GitHub Actions** combines these to create parallel jobs (the orchestrator)
+- **CMake** doesn't care - it just builds what you pass to `-DTHEROCK_AMDGPU_FAMILIES`
 
 #### How CI Uses Build Stages
 
