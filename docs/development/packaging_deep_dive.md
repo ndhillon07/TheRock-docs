@@ -2099,11 +2099,9 @@ A portable artifact is a `.tar.xz` file containing everything needed for one com
 
 **Example:** `therock-blas-linux-gfx94X-dcgpu.tar.xz`
 
-Extract it and you get:
+**CRITICAL: Understanding the Complete Build-to-Package Flow**
 
-**CRITICAL: The Complete Build-to-Package Flow**
-
-Before showing the final packaged contents, let's understand the complete flow from raw source code to final `.tar.xz` file.
+Before we look at what's inside a `.tar.xz` file, let's understand how it's created. This section traces the complete flow from raw source code to final package.
 
 **Step-by-Step: How rocBLAS Goes from Source Code to .tar.xz Package**
 
