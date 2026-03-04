@@ -1795,6 +1795,78 @@ CMake = Boss reading the letters
 
 **The key insight:** `therock_add_feature()` is like a pre-existing rubber stamp. Python doesn't create the stamp, it just decides when to use it and what text to stamp.
 
+#### Where CI Nightly Passes Enable Flags
+
+**You asked: "where is nightly passing the info to actual build to enable all?"**
+
+Here's the complete chain from nightly workflow to the cmake command:
+
+```
+.github/workflows/ci_nightly.yml (scheduled trigger)
+  └─ Calls: .github/workflows/ci_linux.yml
+       └─ Calls: .github/workflows/build_portable_linux_artifacts.yml
+            └─ Runs: build_tools/github_actions/build_configure.py
+                 └─ Executes: cmake -B build -DTHEROCK_AMDGPU_FAMILIES=gfx94X ...
+```
+
+**BUT - ci_nightly does NOT pass enable flags explicitly!**
+
+Instead, it relies on **CMake presets**:
+
+```yaml
+# ci_linux.yml passes a preset name:
+build_variant_cmake_preset: "linux-release"  # Or "linux-release-asan", etc.
+```
+
+**CMake presets** (defined in `CMakePresets.json`) contain the enable flags:
+
+```json
+{
+  "name": "linux-release",
+  "cacheVariables": {
+    "THEROCK_ENABLE_ALL": "ON"  ← This is where it comes from!
+  }
+}
+```
+
+**For sharded multi_arch workflows** (used for releases), a different script generates the flags:
+
+```
+multi_arch_build_portable_linux_artifacts.yml
+  └─ Runs: build_tools/configure_stage.py --stage=math-libs
+       └─ Reads BUILD_TOPOLOGY.toml
+       └─ Generates flags for ONLY that stage:
+            -DTHEROCK_ENABLE_ALL=OFF
+            -DTHEROCK_ENABLE_BLAS=ON
+            -DTHEROCK_ENABLE_FFT=ON
+            -DTHEROCK_ENABLE_SOLVER=ON
+       └─ Passes to: cmake -B build <generated flags>
+```
+
+**Summary:**
+
+| Workflow Type | How Enable Flags Are Set |
+|---------------|--------------------------|
+| **ci_nightly.yml** | CMake preset (`linux-release`) contains `-DTHEROCK_ENABLE_ALL=ON` |
+| **multi_arch workflows** | `configure_stage.py` reads BUILD_TOPOLOGY.toml and generates stage-specific flags |
+| **Manual builds** | You pass `-DTHEROCK_ENABLE_*` flags directly on command line |
+
+**Example from configure_stage.py output:**
+
+```bash
+# For math-libs stage:
+python build_tools/configure_stage.py --stage=math-libs
+
+# Outputs:
+-DTHEROCK_ENABLE_ALL=OFF          # Disable everything first
+-DTHEROCK_ENABLE_BLAS=ON          # Enable only math-libs components
+-DTHEROCK_ENABLE_FFT=ON
+-DTHEROCK_ENABLE_RAND=ON
+-DTHEROCK_ENABLE_SOLVER=ON
+-DTHEROCK_ENABLE_SPARSE=ON
+# (It reads BUILD_TOPOLOGY.toml to know which artifacts are in math-libs)
+```
+
 ### Level 4: Artifacts
 
 **What they are:** Individual `.tar.xz` files - the actual build outputs
@@ -1959,26 +2031,26 @@ ninja -C build
 **CRITICAL: Understanding the 3 Levels of Parallelism**
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│ ONE CI Build (1 Machine, 64 CPU cores, builds for gfx94X)      │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│ Component-Level Parallelism:                                    │
-│ ┌─────────────┐  ┌─────────────┐  ┌─────────────┐             │
-│ │   rocBLAS   │  │   rocFFT    │  │  rocSOLVER  │  ← All build│
-│ │             │  │             │  │             │    at same   │
-│ │ Uses threads│  │ Uses threads│  │ Uses threads│    time      │
-│ │    1-16     │  │   17-32     │  │   33-48     │             │
-│ └─────────────┘  └─────────────┘  └─────────────┘             │
-│         ↓                ↓                ↓                     │
-│ File-Level Parallelism (within each component):                │
-│  Thread 1: axpy.cpp    Thread 17: fft.cpp    Thread 33: lu.cpp│
-│  Thread 2: gemv.cpp    Thread 18: ifft.cpp   Thread 34: qr.cpp│
-│  Thread 3: gemm.cpp    Thread 19: plan.cpp   Thread 35: sv.cpp│
-│  ... all .cpp files compile simultaneously                     │
-│                                                                 │
-│ Output: 4 .tar.xz files (all optimized for gfx94X)             │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│ ONE CI Build (1 Machine, 64 CPU cores, builds for gfx94X)              │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│ Component-Level Parallelism:                                            │
+│ ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐               │
+│ │ rocBLAS  │  │ rocFFT   │  │rocSOLVER │  │ rocRAND  │  ← All 4 build│
+│ │          │  │          │  │          │  │          │    at same     │
+│ │  threads │  │  threads │  │  threads │  │  threads │    time        │
+│ │   1-16   │  │  17-32   │  │  33-48   │  │  49-64   │               │
+│ └──────────┘  └──────────┘  └──────────┘  └──────────┘               │
+│      ↓             ↓             ↓             ↓                        │
+│ File-Level Parallelism (within each component):                        │
+│  Thread 1: axpy.cpp  Thread 17: fft.cpp  Thread 33: lu.cpp  Thread 49: rand.cpp│
+│  Thread 2: gemv.cpp  Thread 18: ifft.cpp Thread 34: qr.cpp  Thread 50: dist.cpp│
+│  Thread 3: gemm.cpp  Thread 19: plan.cpp Thread 35: sv.cpp  Thread 51: gen.cpp│
+│  ... all .cpp files compile simultaneously                             │
+│                                                                         │
+│ Output: 4 .tar.xz files (all optimized for gfx94X)                     │
+└─────────────────────────────────────────────────────────────────────────┘
 
               ┌──── Machine-Level Parallelism ────┐
 
