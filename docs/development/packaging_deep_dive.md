@@ -1579,25 +1579,104 @@ artifact_deps = ["core-hip"]
 **What happens when you build:**
 
 ```bash
+# REALISTIC CI EXAMPLE - What actually happens in CI
+
 # 1. CMake configure - Python reads BUILD_TOPOLOGY.toml
-cmake -B build -DTHEROCK_ENABLE_BLAS=ON -DTHEROCK_AMDGPU_FAMILIES=gfx94X-dcgpu
+cmake -B build \
+  -DTHEROCK_ENABLE_BLAS=ON \
+  -DTHEROCK_ENABLE_FFT=ON \
+  -DTHEROCK_ENABLE_SOLVER=ON \
+  -DTHEROCK_ENABLE_RAND=ON \
+  -DTHEROCK_AMDGPU_FAMILIES=gfx94X-dcgpu
 
-# Generated CMake code creates:
-#   THEROCK_ENABLE_BLAS = ON
-#   artifact-blas target
-#   Dependencies: artifact-blas depends on artifact-core-hip
+# Generated CMake code creates targets for all enabled components:
+#   THEROCK_ENABLE_BLAS = ON    → artifact-blas target
+#   THEROCK_ENABLE_FFT = ON     → artifact-fft target
+#   THEROCK_ENABLE_SOLVER = ON  → artifact-solver target
+#   THEROCK_ENABLE_RAND = ON    → artifact-rand target
 
-# 2. Build
-ninja -C build artifact-blas
+# 2. Build ALL enabled components
+ninja -C build
+# OR: ninja -C build therock-artifacts (to also create .tar.xz files)
 
-# CMake:
-#   1. Checks if THEROCK_ENABLE_BLAS=ON (yes)
-#   2. Builds dependencies first (core-hip)
-#   3. Builds rocBLAS
-#   4. Creates: build/artifacts/therock-blas-linux-gfx94X-dcgpu.tar.xz
+# What happens with parallelism (3 levels):
+#
+# LEVEL 1: Component-level parallelism
+#   ninja builds multiple components at the same time:
+#   - Thread group 1-16:  Compiling rocBLAS  (blas/src/*.cpp)
+#   - Thread group 17-32: Compiling rocFFT   (fft/src/*.cpp)
+#   - Thread group 33-48: Compiling rocSOLVER (solver/src/*.cpp)
+#   - Thread group 49-64: Compiling rocRAND  (rand/src/*.cpp)
+#
+#   All 4 components build IN PARALLEL (if independent)
+#   If solver depends on blas, ninja builds blas first, then solver
+#
+# LEVEL 2: File-level parallelism (within each component)
+#   Within rocBLAS alone:
+#   - Thread 1:  Compiling rocblas_axpy.cpp
+#   - Thread 2:  Compiling rocblas_gemv.cpp
+#   - Thread 3:  Compiling rocblas_gemm.cpp
+#   - ... (all .cpp files compile in parallel using all available CPU cores)
+#
+# LEVEL 3: Machine-level parallelism (CI jobs)
+#   This whole build is happening on ONE machine for gfx94X
+#   Simultaneously, another machine is doing the same for gfx1100
+#   (See "Are Generic Builds Repeated?" section above)
 
-# 3. CI uploads to S3
+# Result after ~3 hours on 64-core machine:
+#   build/artifacts/therock-blas-linux-gfx94X-dcgpu.tar.xz
+#   build/artifacts/therock-fft-linux-gfx94X-dcgpu.tar.xz
+#   build/artifacts/therock-solver-linux-gfx94X-dcgpu.tar.xz
+#   build/artifacts/therock-rand-linux-gfx94X-dcgpu.tar.xz
+
+# 3. CI uploads ALL artifacts to S3
 #   s3://therock-ci-artifacts/{run_id}-linux/therock-blas-linux-gfx94X-dcgpu.tar.xz
+#   s3://therock-ci-artifacts/{run_id}-linux/therock-fft-linux-gfx94X-dcgpu.tar.xz
+#   s3://therock-ci-artifacts/{run_id}-linux/therock-solver-linux-gfx94X-dcgpu.tar.xz
+#   s3://therock-ci-artifacts/{run_id}-linux/therock-rand-linux-gfx94X-dcgpu.tar.xz
+```
+
+**CRITICAL: Understanding the 3 Levels of Parallelism**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ ONE CI Build (1 Machine, 64 CPU cores, builds for gfx94X)      │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│ Component-Level Parallelism:                                    │
+│ ┌─────────────┐  ┌─────────────┐  ┌─────────────┐             │
+│ │   rocBLAS   │  │   rocFFT    │  │  rocSOLVER  │  ← All build│
+│ │             │  │             │  │             │    at same   │
+│ │ Uses threads│  │ Uses threads│  │ Uses threads│    time      │
+│ │    1-16     │  │   17-32     │  │   33-48     │             │
+│ └─────────────┘  └─────────────┘  └─────────────┘             │
+│         ↓                ↓                ↓                     │
+│ File-Level Parallelism (within each component):                │
+│  Thread 1: axpy.cpp    Thread 17: fft.cpp    Thread 33: lu.cpp│
+│  Thread 2: gemv.cpp    Thread 18: ifft.cpp   Thread 34: qr.cpp│
+│  Thread 3: gemm.cpp    Thread 19: plan.cpp   Thread 35: sv.cpp│
+│  ... all .cpp files compile simultaneously                     │
+│                                                                 │
+│ Output: 4 .tar.xz files (all optimized for gfx94X)             │
+└─────────────────────────────────────────────────────────────────┘
+
+              ┌──── Machine-Level Parallelism ────┐
+
+┌─────────────────────────────────────────────────────────────────┐
+│ ANOTHER CI Build (Different Machine, builds for gfx1100)       │
+│ Same process, same 4 components, different GPU optimization    │
+│ Output: 4 .tar.xz files (all optimized for gfx1100)            │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**To answer your question directly:**
+
+- NO, it's not 1 thread building blas while others are idle
+- YES, ninja builds multiple components in parallel (blas, fft, solver, rand)
+- YES, within each component, multiple threads compile different .cpp files
+- In CI, we enable MANY components (not just blas), so ninja has lots to parallelize
+- ONE machine builds multiple components in parallel using all CPU cores
+- MULTIPLE machines build for different GPUs simultaneously (machine-level parallelism)
 ```
 
 ### Summary: The Four Levels in Simple Terms
