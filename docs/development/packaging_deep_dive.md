@@ -449,10 +449,10 @@ When developers push code to GitHub, CI automatically:
 **Real example from BUILD_TOPOLOGY.toml:**
 
 ```toml
+# Build stages define CI job boundaries
 [build_stages.foundation]
 description = "Foundation - critical path dependencies"
 artifact_groups = ["third-party-sysdeps", "base"]
-# No dependencies - this runs first
 
 [build_stages.compiler-runtime]
 description = "Compiler, runtimes, and core profiling"
@@ -462,7 +462,6 @@ artifact_groups = [
     "hip-runtime",
     "profiler-core"
 ]
-# Depends on foundation
 
 [build_stages.math-libs]
 description = "Math and ML libraries per architecture"
@@ -473,6 +472,86 @@ type = "per-arch"  # Special: run once per GPU family
 description = "Communication libraries per architecture"
 artifact_groups = ["comm-libs"]
 type = "per-arch"
+```
+
+**Wait - where are the dependencies?**
+
+Notice there's no `depends_on` field in build_stages! That's because **dependencies are inferred from artifact_groups**.
+
+Here are the actual artifact_groups definitions (also in BUILD_TOPOLOGY.toml):
+
+```toml
+# Artifact groups define dependencies
+[artifact_groups.third-party-sysdeps]
+description = "Third-party system libraries"
+type = "generic"
+# No artifact_group_deps - this is a foundation piece
+
+[artifact_groups.base]
+description = "Base ROCm infrastructure"
+type = "generic"
+artifact_group_deps = []  # Empty list means no dependencies
+
+[artifact_groups.compiler]
+description = "AMD LLVM toolchain"
+type = "generic"
+artifact_group_deps = ["third-party-sysdeps"]  # Needs sysdeps first!
+source_sets = ["compilers"]
+
+[artifact_groups.core-runtime]
+description = "Core runtime (ROCR-Runtime)"
+type = "generic"
+artifact_group_deps = ["base", "third-party-sysdeps"]  # Needs base AND sysdeps
+source_sets = ["rocm-systems"]
+
+[artifact_groups.hip-runtime]
+description = "HIP runtime"
+type = "generic"
+artifact_group_deps = ["compiler", "core-runtime"]  # Needs compiler AND runtime!
+source_sets = ["rocm-systems"]
+
+[artifact_groups.math-libs]
+description = "Math libraries (BLAS, FFT, etc.)"
+type = "per-arch"
+artifact_group_deps = ["hip-runtime"]  # Needs HIP to compile GPU kernels
+source_sets = ["rocm-libraries", "math-libs"]
+```
+
+**How dependencies are computed:**
+
+```
+Build stage: compiler-runtime
+  Contains artifact_groups: ["compiler", "core-runtime", "hip-runtime", ...]
+
+Dependency computation:
+  1. compiler depends on: ["third-party-sysdeps"]
+  2. core-runtime depends on: ["base", "third-party-sysdeps"]
+  3. hip-runtime depends on: ["compiler", "core-runtime"]
+
+  Combined: This stage needs ["base", "third-party-sysdeps"] first
+            (which are in the foundation stage)
+
+Therefore: compiler-runtime stage must wait for foundation stage to complete!
+```
+
+**The complete picture:**
+
+```
+foundation stage builds:
+  - third-party-sysdeps (no deps)
+  - base (no deps)
+  └─> Can run first!
+
+compiler-runtime stage builds:
+  - compiler (needs: third-party-sysdeps from foundation)
+  - core-runtime (needs: base, third-party-sysdeps from foundation)
+  - hip-runtime (needs: compiler, core-runtime from same stage)
+  └─> Must wait for foundation to finish and upload artifacts
+
+math-libs stage builds:
+  - math-libs (needs: hip-runtime from compiler-runtime)
+  - ml-libs (needs: math-libs, hip-runtime)
+  └─> Must wait for compiler-runtime to finish and upload artifacts
 ```
 
 #### What "type = per-arch" Means
