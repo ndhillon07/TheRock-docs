@@ -724,6 +724,96 @@ LEVEL 3: Artifact Groups  (how do we group related components?)
 LEVEL 4: Artifacts        (what are the actual .tar.xz files?)
 ```
 
+**Visual Schematic with Relationships:**
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ LEVEL 1: Source Sets (Git Submodules)                                  │
+│ Cardinality: Many submodules → Many source sets                        │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  [source_sets.compilers]                [source_sets.rocm-libraries]   │
+│   └─ submodules: ["llvm-project",       └─ submodules: ["rocm-libraries"]│
+│                   "hipify", ...]                                        │
+│                                                                         │
+│   1 source set contains N submodules (1:N relationship)                │
+└────────────────────────┬────────────────────────────────────────────────┘
+                         │ referenced by
+                         ↓
+┌─────────────────────────────────────────────────────────────────────────┐
+│ LEVEL 2: Build Stages (CI Job Boundaries)                              │
+│ Cardinality: 1 stage contains N artifact groups                        │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  [build_stages.foundation]         [build_stages.compiler-runtime]     │
+│   ├─ artifact_groups: ["base",     ├─ artifact_groups: ["compiler",   │
+│   │    "third-party-sysdeps"]      │    "core-runtime", "hip-runtime"]│
+│   └─ type: "generic"               └─ type: "generic"                 │
+│                                                                         │
+│  [build_stages.math-libs]                                              │
+│   ├─ artifact_groups: ["math-libs", "ml-libs"]                         │
+│   └─ type: "per-arch" ← Built once per GPU family                     │
+│                                                                         │
+│   1 build stage contains N artifact groups (1:N relationship)          │
+└────────────────────────┬────────────────────────────────────────────────┘
+                         │ contains
+                         ↓
+┌─────────────────────────────────────────────────────────────────────────┐
+│ LEVEL 3: Artifact Groups (Logical Groupings)                           │
+│ Cardinality: 1 group contains N artifacts                              │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  [artifact_groups.compiler]         [artifact_groups.math-libs]        │
+│   ├─ type: "generic"                ├─ type: "target-specific"         │
+│   ├─ source_sets: ["compilers"]     ├─ source_sets: ["rocm-libraries"]│
+│   ├─ artifact_group_deps: []        ├─ artifact_group_deps:            │
+│   └─ artifacts in this group:       │    ["compiler", "hip-runtime"]  │
+│       • compiler                    └─ artifacts in this group:        │
+│       • device-libs                     • blas                         │
+│       • hipcc                           • fft                          │
+│                                         • solver                       │
+│                                                                         │
+│   1 artifact group contains N artifacts (1:N relationship)             │
+│   1 artifact group depends on M other groups (M:N relationship)        │
+│   1 artifact group references K source sets (M:N relationship)         │
+└────────────────────────┬────────────────────────────────────────────────┘
+                         │ contains
+                         ↓
+┌─────────────────────────────────────────────────────────────────────────┐
+│ LEVEL 4: Artifacts (Individual .tar.xz files)                          │
+│ Cardinality: 1 artifact can depend on N other artifacts                │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  [artifacts.blas]                                                      │
+│   ├─ type: "target-specific" ← Built per GPU family                   │
+│   ├─ artifact_group: "math-libs"                                       │
+│   ├─ artifact_deps: ["hip-runtime", "compiler"] ← Needs these first!  │
+│   ├─ split_databases: ["rocblas"] ← Creates multiple .tar.xz files    │
+│   └─ Output files:                                                     │
+│       • therock-blas-linux-gfx94X-dcgpu.tar.xz                         │
+│       • therock-blas-linux-gfx1100.tar.xz                              │
+│       • therock-blas-linux-gfx950-dcgpu.tar.xz                         │
+│                                                                         │
+│  [artifacts.compiler]                                                  │
+│   ├─ type: "target-neutral" ← Built once for all GPUs                 │
+│   ├─ artifact_group: "compiler"                                        │
+│   ├─ artifact_deps: ["third-party-sysdeps"]                            │
+│   └─ Output file:                                                      │
+│       • therock-compiler-linux.tar.xz (no GPU suffix!)                 │
+│                                                                         │
+│   1 artifact depends on N other artifacts (1:N relationship)           │
+│   1 artifact belongs to exactly 1 artifact group (N:1 relationship)    │
+└─────────────────────────────────────────────────────────────────────────┘
+
+Key Relationships Summary:
+  • 1 Build Stage → N Artifact Groups (contains)
+  • 1 Artifact Group → N Artifacts (contains)
+  • 1 Artifact Group → M Source Sets (references for code)
+  • 1 Artifact Group → K Artifact Groups (depends on)
+  • 1 Artifact → L Artifacts (depends on)
+  • 1 Source Set → P Git Submodules (contains)
+```
+
 Let's understand each level with concrete examples.
 
 ### Level 1: Source Sets
