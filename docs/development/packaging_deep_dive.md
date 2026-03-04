@@ -357,6 +357,113 @@ amdgpu_family_info_matrix_presubmit = {
 
 **BUILD_TOPOLOGY.toml only says `type = "per-arch"`** - it doesn't list which GPUs. GitHub Actions reads that and says "okay, I need to create one job per GPU family from my matrix."
 
+### CRITICAL: Does configure_ci.py Actually Read BUILD_TOPOLOGY.toml?
+
+**NO! This is a common misconception.**
+
+**configure_ci.py ONLY reads amdgpu_family_matrix.py.** BUILD_TOPOLOGY.toml is read by completely different scripts that run later inside each build job.
+
+**Here's the exact flow:**
+
+```
+GitHub Actions Workflow Starts
+  ↓
+setup.yml runs configure_ci.py
+  ├─ Reads: amdgpu_family_matrix.py ONLY
+  ├─ Outputs: JSON matrix of GPU families
+  └─ Does NOT open BUILD_TOPOLOGY.toml
+  ↓
+GitHub Actions creates parallel jobs from matrix
+  ↓
+Each build job runs these scripts (which DO read BUILD_TOPOLOGY.toml):
+  ├─ configure_stage.py → determines CMake flags from BUILD_TOPOLOGY.toml
+  ├─ fetch_sources.py → downloads submodules based on BUILD_TOPOLOGY.toml
+  └─ topology_to_cmake.py → generates CMake code from BUILD_TOPOLOGY.toml
+```
+
+### Are Generic Builds Repeated in Each Matrix Job?
+
+**NO! They're built ONCE and downloaded from S3 by all jobs.**
+
+**Proof with actual workflow structure:**
+
+```yaml
+# foundation job (1 machine, runs once)
+foundation:
+  amdgpu_family: ""  # Empty = generic build
+  # Builds: sysdeps, base for ALL GPUs
+  # Uploads: therock-base-linux.tar.xz (no GPU suffix!)
+
+# compiler-runtime job (1 machine, runs once)
+compiler-runtime:
+  needs: foundation
+  amdgpu_family: ""  # Empty = generic build
+  # Downloads: therock-base-linux.tar.xz from S3
+  # Builds: compiler, HIP runtime for ALL GPUs
+  # Uploads: therock-compiler-linux.tar.xz (no GPU suffix!)
+
+# math-libs jobs (3 machines, run in parallel!)
+math-libs:
+  needs: compiler-runtime
+  strategy:
+    matrix:
+      family: ["gfx94X-dcgpu", "gfx1100", "gfx950-dcgpu"]
+  # EACH job:
+  #   Downloads: therock-compiler-linux.tar.xz ← SAME FILE!
+  #   Builds: rocBLAS for ONLY its GPU family
+  #   Uploads: therock-blas-linux-{GPU}.tar.xz (with GPU suffix!)
+```
+
+**Timeline showing artifact reuse:**
+
+```
+T+0:00  foundation (Machine A)
+        └─ Uploads: therock-compiler-linux.tar.xz → S3
+
+T+2:00  compiler-runtime (Machine B)
+        ├─ Downloads: therock-base-linux.tar.xz ← FROM S3
+        └─ Uploads: therock-compiler-linux.tar.xz → S3
+
+T+4:00  THREE jobs start SIMULTANEOUSLY:
+
+        Machine C (gfx94X):
+          ├─ Downloads: therock-compiler-linux.tar.xz ← SAME FILE
+          └─ Builds: rocBLAS for gfx94X only
+
+        Machine D (gfx1100):
+          ├─ Downloads: therock-compiler-linux.tar.xz ← SAME FILE
+          └─ Builds: rocBLAS for gfx1100 only
+
+        Machine E (gfx950):
+          ├─ Downloads: therock-compiler-linux.tar.xz ← SAME FILE
+          └─ Builds: rocBLAS for gfx950 only
+
+Result: Compiler built ONCE, downloaded 3 times
+        rocBLAS built 3 TIMES (once per GPU)
+```
+
+**S3 bucket proof:**
+
+```
+s3://therock-ci-artifacts/12345-linux/
+
+Generic (no GPU suffix = built once):
+  therock-compiler-linux.tar.xz               ← 1 file, used by all
+
+Per-arch (GPU suffix = built per family):
+  therock-blas-linux-gfx94X-dcgpu.tar.xz      ← 3 separate files
+  therock-blas-linux-gfx1100.tar.xz
+  therock-blas-linux-gfx950-dcgpu.tar.xz
+```
+
+**Efficiency:**
+
+```
+If compiler was built 3 times: 2 hours × 3 = 6 hours
+Actual (built once, shared):    2 hours × 1 = 2 hours
+Savings:                        4 hours!
+```
+
 ### The 4-Level Hierarchy
 
 BUILD_TOPOLOGY.toml organizes ROCm using four levels of abstraction:
