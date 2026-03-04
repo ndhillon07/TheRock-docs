@@ -209,6 +209,19 @@ Let's be very clear about what reads what:
 │      - therock_add_feature() calls                          │
 │      - CMake targets (artifact-blas, etc.)                  │
 │      - Dependency variables                                 │
+│      - THEROCK_ARTIFACT_TYPE_{name} variables               │
+│                                                              │
+│ ⚠️  CRITICAL: CMake does NOT natively understand TOML!      │
+│ ⚠️  The Python script converts TOML → CMake variables       │
+│                                                              │
+│ Example generated CMake code:                                │
+│   set(THEROCK_ARTIFACT_TYPE_blas "target-specific")         │
+│   set(THEROCK_ARTIFACT_TYPE_compiler "target-neutral")      │
+│   # (From BUILD_TOPOLOGY.toml artifacts[].type field)       │
+│                                                              │
+│ File: build_tools/topology_to_cmake.py                      │
+│ Line 257: Converts artifact.type → CMake variable           │
+│   f.write(f'set(THEROCK_ARTIFACT_TYPE_{name} "{type}")\n')  │
 │                                                              │
 │ Output: build/cmake/therock_topology.cmake                  │
 └────────────────────────┬────────────────────────────────────┘
@@ -237,7 +250,11 @@ Let's be very clear about what reads what:
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**Key insight:** BUILD_TOPOLOGY.toml is a data file, not a build script. Python reads it once at configure time and translates it to CMake code.
+**Key insights:**
+- **BUILD_TOPOLOGY.toml is a data file, not a build script** - Python reads it once at configure time and translates it to CMake code
+- **CMake doesn't natively understand TOML** - topology_to_cmake.py converts it to CMake `set()` commands
+- **Build order is computed by Python** - topology_to_cmake.py analyzes dependencies and generates `THEROCK_BUILD_ORDER` list
+- **`type = "per-arch"` becomes a CMake variable** - `THEROCK_ARTIFACT_TYPE_blas = "target-specific"`
 
 ### How GitHub Actions Processes BUILD_TOPOLOGY.toml
 
@@ -448,6 +465,8 @@ Each build job runs these scripts (which DO read BUILD_TOPOLOGY.toml):
 #### Workflow Type 1: Monolithic Builds (ci_nightly.yml → ci_linux.yml)
 
 **Answer: YES, generic builds are REPEATED for each GPU family**
+
+**WHY?** Because configure_ci.py doesn't read BUILD_TOPOLOGY.toml! It only knows about GPU families from amdgpu_family_matrix.py. It doesn't know which components are generic vs per-arch, so it creates simple GPU-based jobs where each builds EVERYTHING.
 
 This is the workflow used for nightly CI and quick testing. Each GPU family gets a completely independent build.
 
@@ -1075,10 +1094,30 @@ Result: 3 parallel CI jobs created:
 Instead of 12 hours sequential, takes 4 hours parallel!
 ```
 
+**CRITICAL UNDERSTANDING: Two Different Workflows**
+
+The above describes **ci_nightly** (monolithic workflow). There's also **multi_arch** (sharded workflow) which works differently:
+
+| Aspect | Monolithic (ci_nightly) | Sharded (multi_arch) |
+|--------|------------------------|----------------------|
+| **Job Creation** | configure_ci.py reads amdgpu_family_matrix.py ONLY | Workflow file manually defines stage jobs |
+| **Knows about stages?** | NO - just creates GPU-based jobs | YES - foundation, compiler-runtime, math-libs, etc. |
+| **Generic components** | Built 3 times (once per GPU job) | Built ONCE (foundation + compiler-runtime jobs) |
+| **Per-arch components** | Built 3 times (once per GPU job) | Built 3 times (math-libs with GPU matrix) |
+| **Artifact sharing** | NO - each job is independent | YES - S3 via artifact_manager.py |
+| **Build time** | 4 hours (all parallel) | 5.5 hours (sequential stages) |
+| **Compute waste** | High (compiler built 3x) | Low (compiler built 1x) |
+
+**The key difference:**
+- **Monolithic**: configure_ci.py creates simple GPU matrix, each job builds everything
+- **Sharded**: .github/workflows file has hardcoded stage structure, uses BUILD_TOPOLOGY.toml inside jobs
+
+See "Are Generic Builds Repeated in Each Matrix Job?" section below for detailed explanation with actual workflow code.
+
 **Remember:**
 - **amdgpu_family_matrix.py** defines which GPU families to build (configure_ci.py reads THIS)
 - **BUILD_TOPOLOGY.toml** says `type = "per-arch"` (CMake uses this INSIDE each job, NOT for job creation)
-- **GitHub Actions** creates parallel jobs based ONLY on amdgpu_family_matrix.py
+- **GitHub Actions** creates parallel jobs based ONLY on amdgpu_family_matrix.py (monolithic) OR manually coded stages (sharded)
 - **CMake** reads BUILD_TOPOLOGY.toml to decide what to build for the given `-DTHEROCK_AMDGPU_FAMILIES`
 
 #### How CI Uses Build Stages
