@@ -2106,17 +2106,34 @@ TheRock creates TWO different types of archive files with different naming patte
    - **Split:** Each component gets its own `.tar.xz` file
    - **Location:** `build/artifacts/` → uploaded to S3
 
-2. **Distribution Tarballs** (later packaging stages):
+2. **Distribution Tarballs** (created in release workflows):
    - **Naming:** `therock-dist-linux-{family}-{version}.tar.gz`
    - **Examples:**
      - `therock-dist-linux-gfx94X-dcgpu-7.10.0a20251124.tar.gz` (nightly build)
      - `therock-dist-linux-gfx94X-dcgpu-7.10.0.dev0+f689a8ea.tar.gz` (dev release)
-   - **Created by:** Packaging workflows (build_tools/packaging/)
-   - **Purpose:** Complete ROCm installation for end users
-   - **Bundled:** Contains multiple artifacts and all their components combined
+     - `therock-dist-linux-gfx90X-dcgpu-7.11.0rc1.tar.gz` (release candidate)
+   - **Created by:** Release workflows (`.github/workflows/release_portable_linux_packages.yml`)
+   - **When:** After CI builds complete, during nightly/dev/prerelease/release workflows
+   - **How created:**
+     1. Download all component `.tar.xz` files from S3 (from CI build)
+     2. Extract all components into `build/dist/rocm/` (merged install tree)
+     3. Run `cmake --build build --target therock-dist` (merges everything)
+     4. Create single tarball: `tar cfz therock-dist-linux-*.tar.gz build/dist/rocm/`
+   - **Purpose:** Complete ROCm installation for end users who want everything in one file
+   - **Bundled:** Contains ALL artifacts and ALL components merged into single `/opt/rocm/` layout
    - **Location:** Published to https://rocm.nightlies.amd.com/tarball/
 
-**In this section (Part 3), we focus exclusively on CI Build Artifacts using the `{artifact}_{component}_{target}.tar.xz` naming pattern.**
+**Key Workflow Difference:**
+
+```
+CI Build Workflow (happens first):
+  ninja artifacts → Creates 260+ separate .tar.xz files → Upload to therock-ci-artifacts
+
+Release Workflow (happens later):
+  Download .tar.xz from S3 → Extract all → Merge → Create therock-dist-*.tar.gz → Upload to therock-nightly-tarball
+```
+
+**In this section (Part 3), we focus exclusively on CI Build Artifacts using the `{artifact}_{component}_{target}.tar.xz` naming pattern. Distribution tarballs are covered in Part 7.**
 
 **CRITICAL: Understanding the Complete Build-to-Package Flow**
 
@@ -3414,15 +3431,47 @@ https://rocm.devreleases.amd.com/v2/gfx94X-dcgpu/index.html
 https://rocm.prereleases.amd.com/whl/index.html
 ```
 
-**Tarballs:**
+**Distribution Tarballs:**
 
 ```
-# Nightly
+# Nightly (built daily from latest main branch)
 https://rocm.nightlies.amd.com/tarball/therock-dist-linux-gfx94X-dcgpu-7.10.0a20251124.tar.gz
 
-# Dev
+# Dev (built from specific commits for testing)
 https://rocm.devreleases.amd.com/tarball/therock-dist-linux-gfx94X-dcgpu-7.10.0.dev0+f689a8ea.tar.gz
+
+# Prerelease (release candidates)
+https://rocm.prereleases.amd.com/tarball/therock-dist-linux-gfx90X-dcgpu-7.11.0rc1.tar.gz
 ```
+
+**What's inside these tarballs:**
+
+These are **complete ROCm installations** - all artifacts and all components merged:
+
+```bash
+# Download
+wget https://rocm.nightlies.amd.com/tarball/therock-dist-linux-gfx94X-dcgpu-7.10.0a20251124.tar.gz
+
+# Extract
+tar xzf therock-dist-linux-gfx94X-dcgpu-7.10.0a20251124.tar.gz
+
+# Result: Complete /opt/rocm/ directory structure
+opt/rocm/
+├── bin/           # All executables (hipcc, rocm-smi, rocgdb, etc.)
+├── lib/           # All shared libraries (librocblas.so, libhip.so, etc.)
+├── include/       # All headers (hip/, rocblas/, etc.)
+├── share/         # Documentation, examples
+└── ...
+```
+
+**How these are created:**
+
+See Part 3 for details, but in summary:
+1. CI builds create 260+ separate `.tar.xz` files (one per component)
+2. Release workflow downloads all component `.tar.xz` files from S3
+3. Extracts and merges them into unified `build/dist/rocm/` tree
+4. Creates single `therock-dist-linux-*.tar.gz` from merged tree
+5. Uploads to `therock-{nightly|dev|prerelease}-tarball` S3 bucket
 
 **Native packages:**
 
