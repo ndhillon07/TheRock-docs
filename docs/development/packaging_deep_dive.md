@@ -1056,12 +1056,16 @@ amdgpu_family_info_matrix_nightly = {
 
 BUILD_TOPOLOGY.toml says:
   [build_stages.math-libs]
-  type = "per-arch"  ← This tells GitHub Actions to multiply jobs!
+  type = "per-arch"  ← CMake uses this INSIDE build jobs (NOT GitHub Actions!)
 
 GitHub Actions configure_ci.py script:
-  1. Sees type = "per-arch" in BUILD_TOPOLOGY.toml
-  2. Reads GPU families from amdgpu_family_matrix.py
-  3. Creates one job per family
+  ⚠️  Does NOT read BUILD_TOPOLOGY.toml!
+  ⚠️  Does NOT see type = "per-arch"!
+
+  What it actually does:
+  1. Reads GPU families ONLY from amdgpu_family_matrix.py
+  2. Creates one job per GPU family
+  3. That's it - no knowledge of build stages or type="per-arch"!
 
 Result: 3 parallel CI jobs created:
   Job 1: cmake -DTHEROCK_AMDGPU_FAMILIES=gfx94X-dcgpu (Machine A)
@@ -1072,42 +1076,43 @@ Instead of 12 hours sequential, takes 4 hours parallel!
 ```
 
 **Remember:**
-- **BUILD_TOPOLOGY.toml** says `type = "per-arch"` (the signal)
-- **amdgpu_family_matrix.py** says which GPUs exist (the list)
-- **GitHub Actions** combines these to create parallel jobs (the orchestrator)
-- **CMake** doesn't care - it just builds what you pass to `-DTHEROCK_AMDGPU_FAMILIES`
+- **amdgpu_family_matrix.py** defines which GPU families to build (configure_ci.py reads THIS)
+- **BUILD_TOPOLOGY.toml** says `type = "per-arch"` (CMake uses this INSIDE each job, NOT for job creation)
+- **GitHub Actions** creates parallel jobs based ONLY on amdgpu_family_matrix.py
+- **CMake** reads BUILD_TOPOLOGY.toml to decide what to build for the given `-DTHEROCK_AMDGPU_FAMILIES`
 
 #### How CI Uses Build Stages
 
-**Real workflow from GitHub Actions:**
+**IMPORTANT: Build stages are NOT used for job matrix creation!**
+
+configure_ci.py creates a simple GPU family matrix. Build stages are used LATER inside each job.
+
+**Actual workflow from .github/workflows/setup.yml:**
 
 ```yaml
-# .github/workflows/ci_linux.yml
+# .github/workflows/setup.yml (simplified)
 
 jobs:
-  configure:
+  setup:
     runs-on: ubuntu-latest
     steps:
-      - name: Generate build matrix from topology
+      - name: Configure CI options
         run: |
+          # ⚠️  Does NOT pass --topology flag!
+          # ⚠️  Does NOT read BUILD_TOPOLOGY.toml!
           python build_tools/github_actions/configure_ci.py \
-            --topology BUILD_TOPOLOGY.toml \
-            --gpu-families "gfx94X-dcgpu,gfx1100"
+            --trigger-type presubmit
     outputs:
-      matrix: ${{ steps.generate.outputs.matrix }}
+      # Simple GPU family matrix (no stages!):
+      # [
+      #   {family: "gfx94X-dcgpu", variant: "release"},
+      #   {family: "gfx1100", variant: "release"},
+      # ]
+      linux_variants: ${{ steps.configure.outputs.linux_variants }}
 
-  # This creates jobs dynamically:
-  # [
-  #   {stage: "foundation", gpu: "generic"},
-  #   {stage: "compiler-runtime", gpu: "generic"},
-  #   {stage: "math-libs", gpu: "gfx94X-dcgpu"},
-  #   {stage: "math-libs", gpu: "gfx1100"},
-  #   {stage: "comm-libs", gpu: "gfx94X-dcgpu"},
-  #   {stage: "comm-libs", gpu: "gfx1100"},
-  # ]
-
+  # Each GPU family becomes ONE build job:
   build:
-    needs: configure
+    needs: setup
     strategy:
       matrix: ${{ fromJson(needs.configure.outputs.matrix) }}
     runs-on: azure-scale-set
