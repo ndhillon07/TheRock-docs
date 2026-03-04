@@ -1561,101 +1561,162 @@ A portable artifact is a `.tar.xz` file containing everything needed for one com
 
 Extract it and you get:
 
-**CRITICAL: Understanding the directory path structure**
+**CRITICAL: The Complete Build-to-Package Flow**
 
-Before showing the contents, let's decode this path: `math-libs/BLAS/rocBLAS/stage/`
+Before showing the final packaged contents, let's understand the complete flow from raw source code to final `.tar.xz` file.
+
+**Step-by-Step: How rocBLAS Goes from Source Code to .tar.xz Package**
 
 ```
-math-libs/BLAS/rocBLAS/stage/
-    ↑         ↑      ↑       ↑
-    │         │      │       └─ stage/ = CMake install tree (where files are "staged" before packaging)
-    │         │      └─ rocBLAS = Actual project name (the real library/component)
-    │         └─ BLAS = Artifact name (from BUILD_TOPOLOGY.toml [artifacts.blas])
-    └─ math-libs = Artifact group name (from BUILD_TOPOLOGY.toml)
-```
+STEP 1: Source Code Location (Git Submodule)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Location: rocm-libraries/rocBLAS/
 
-**The Naming Convention:**
+This is where the raw C++ source code lives:
+  rocm-libraries/rocBLAS/library/src/blas1/rocblas_axpy.cpp
+  rocm-libraries/rocBLAS/library/src/blas2/rocblas_gemv.cpp
+  rocm-libraries/rocBLAS/library/src/blas3/rocblas_gemm.cpp
+  rocm-libraries/rocBLAS/CMakeLists.txt
 
-| Level | Name | Where Defined | Example |
-|-------|------|--------------|---------|
-| **Artifact Group** | `math-libs` | BUILD_TOPOLOGY.toml `[artifact_groups.math-libs]` | Directory: `math-libs/` |
-| **Artifact** | `blas` | BUILD_TOPOLOGY.toml `[artifacts.blas]` | Directory: `BLAS/` (uppercase) |
-| **Project** | `rocBLAS` | CMake project name in source code | Directory: `rocBLAS/` |
-| **Install Tree** | `stage` | CMake convention (install prefix) | Directory: `stage/` |
+Git submodule definition (.gitmodules):
+  [submodule "rocm-libraries"]
+    path = rocm-libraries
+    url = https://github.com/ROCm/rocm-libraries
 
-**Why two names? (blas vs rocBLAS)**
+This is the SOURCE - uncompiled C++ code
 
-- **`blas`** = Artifact name (packaging abstraction in BUILD_TOPOLOGY.toml)
-  - Used for: `.tar.xz` filename, CMake feature flags, topology organization
-  - Example: `therock-blas-linux.tar.xz`, `THEROCK_ENABLE_BLAS`
+      ↓ cmake configure + ninja build
 
-- **`rocBLAS`** = Project name (actual source code repository/library)
-  - Used for: git submodule name, actual library name, CMake project name
-  - Example: `librocblas.so`, `rocblas-bench` binary, `#include <rocblas/rocblas.h>`
+STEP 2: Build Directory (CMake Compilation)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Location: build/math-libs/BLAS/rocBLAS/build/
 
-**Where does `stage/` come from?**
+CMake command that creates this:
+  cmake -B build/math-libs/BLAS/rocBLAS/build \
+        -S rocm-libraries/rocBLAS \
+        -DCMAKE_INSTALL_PREFIX=build/math-libs/BLAS/rocBLAS/stage \
+        -DAMDGPU_TARGETS=gfx942
 
-CMake build process for each component:
-```bash
-# 1. Configure: Point CMake to install into stage/ directory
-cmake -B build/math-libs/BLAS/rocBLAS/build \
-      -DCMAKE_INSTALL_PREFIX=build/math-libs/BLAS/rocBLAS/stage
+What happens here:
+  • C++ source files are compiled to object files (.o)
+  • Object files are linked into librocblas.so.4.0.0
+  • Kernel databases are generated (TensileLibrary_gfx942.dat)
+  • Test binaries are built (rocblas-bench, rocblas-test)
 
-# 2. Build: Compile the library
-ninja -C build/math-libs/BLAS/rocBLAS/build
+Files in build/:
+  build/math-libs/BLAS/rocBLAS/build/library/src/librocblas.so.4.0.0
+  build/math-libs/BLAS/rocBLAS/build/library/src/blas1/CMakeFiles/rocblas_axpy.o
+  build/math-libs/BLAS/rocBLAS/build/clients/benchmarks/rocblas-bench
 
-# 3. Install: Copy built files to stage/ (the "install tree")
-ninja -C build/math-libs/BLAS/rocBLAS/build install
+This is the BUILD OUTPUT - compiled binaries, but not yet organized for installation
 
-# Result: build/math-libs/BLAS/rocBLAS/stage/ contains:
-#   - lib/librocblas.so.4.0.0
-#   - include/rocblas/rocblas.h
-#   - bin/rocblas-bench
-#   - etc.
-```
+      ↓ ninja install (copies files to install prefix)
 
-The `stage/` directory is the CMake **install tree** - where files are organized
-in the final runtime layout (lib/, include/, bin/) before being packaged into
-`.tar.xz` files.
+STEP 3: Stage Directory (CMake Install Tree)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Location: build/math-libs/BLAS/rocBLAS/stage/
 
-**File: `math-libs/BLAS/artifact-blas.toml`**
+CMake command that populates this:
+  ninja -C build/math-libs/BLAS/rocBLAS/build install
 
-This file tells the packaging system which files to include from `stage/`:
+What happens:
+  • CMake copies built files to CMAKE_INSTALL_PREFIX location
+  • Files are organized in standard FHS layout (lib/, bin/, include/)
+  • This is the "install tree" - ready to be deployed to /opt/rocm/
 
+Files in stage/:
+  build/math-libs/BLAS/rocBLAS/stage/lib/librocblas.so.4.0.0
+  build/math-libs/BLAS/rocBLAS/stage/lib/librocblas.so.4 → librocblas.so.4.0.0
+  build/math-libs/BLAS/rocBLAS/stage/lib/rocblas/library/TensileLibrary_gfx942.dat
+  build/math-libs/BLAS/rocBLAS/stage/bin/rocblas-bench
+  build/math-libs/BLAS/rocBLAS/stage/include/rocblas/rocblas.h
+  build/math-libs/BLAS/rocBLAS/stage/lib/cmake/rocblas/rocblas-config.cmake
+
+This is the INSTALL TREE - organized exactly like it will appear in /opt/rocm/
+
+      ↓ Packaging system reads artifact-blas.toml
+
+STEP 4: Package Selection (artifact-blas.toml)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Location: math-libs/BLAS/artifact-blas.toml
+
+File: math-libs/BLAS/artifact-blas.toml
 ```toml
-# What files to grab from the stage/ directory
+# This TOML file selects which files from stage/ go into the .tar.xz
+
+# Component: Runtime library (what users need to run applications)
 [components.lib."math-libs/BLAS/rocBLAS/stage"]
 include = [
-  "bin/rocblas/library/**",      # Kernel library data files
-  "lib/rocblas/library/**",      # More kernel data
-  "lib/librocblas.so*",          # The actual library
-  "include/rocblas/**",          # Header files
+  "lib/librocblas.so*",              # The library itself
+  "lib/rocblas/library/**",          # Kernel database files
+]
+
+# Component: Development files (what developers need to compile)
+[components.dev."math-libs/BLAS/rocBLAS/stage"]
+include = [
+  "include/rocblas/**",              # Header files
+  "lib/cmake/rocblas/**",            # CMake config files
+]
+
+# Component: Test binaries (optional, for testing)
+[components.test."math-libs/BLAS/rocBLAS/stage"]
+include = [
+  "bin/rocblas-bench",
+  "bin/rocblas-test",
 ]
 ```
 
-The path `math-libs/BLAS/rocBLAS/stage` means:
-- Look in the build directory at this path
-- The `stage/` subdirectory contains the CMake install tree
-- Extract only the files matching the `include` patterns
+What this means:
+  • Path "math-libs/BLAS/rocBLAS/stage" points to the install tree
+  • include = [...] patterns select files from that tree
+  • Multiple [components.*] sections split files into logical groups
 
-**Now here's what's inside:**
+This is the SELECTION RULES - which files go into the final package
+
+      ↓ ninja artifacts (runs packaging)
+
+STEP 5: Final Package (.tar.xz)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Location: build/artifacts/therock-blas-linux-gfx94X-dcgpu.tar.xz
+
+Command that creates this:
+  ninja -C build artifacts
+
+What happens:
+  1. Reads artifact-blas.toml
+  2. Collects matching files from build/math-libs/BLAS/rocBLAS/stage/
+  3. Creates .tar.xz archive with selected files
+  4. Names it: therock-{artifact}-{platform}-{gpu}.tar.xz
+
+Final archive contents:
+  therock-blas-linux-gfx94X-dcgpu.tar.xz contains:
+    lib/librocblas.so.4.0.0
+    lib/librocblas.so.4 → librocblas.so.4.0.0
+    lib/rocblas/library/TensileLibrary_gfx942.dat
+    include/rocblas/rocblas.h
+    lib/cmake/rocblas/rocblas-config.cmake
+
+This is the FINAL PACKAGE - ready to distribute and install
+```
+
+**Key Points:**
+
+1. **Source** → **Build** → **Stage** → **Package** (4 separate directories)
+2. **Source** = Git submodule with raw C++ code
+3. **Build** = CMake compilation directory (messy, has .o files, temporary files)
+4. **Stage** = Clean install tree (organized like /opt/rocm/)
+5. **Package** = Selected files from stage/ bundled into .tar.xz
+
+**Summary of the Complete Flow:**
 
 ```
-math-libs/BLAS/rocBLAS/stage/
-├── bin/
-│   ├── rocblas-bench
-│   └── rocblas-test
-├── lib/
-│   ├── librocblas.so.4 → librocblas.so.4.0.0
-│   ├── librocblas.so.4.0.0
-│   └── rocblas/library/
-│       └── TensileLibrary_gfx94X.dat
-├── include/
-│   └── rocblas/
-│       └── rocblas.h
-└── lib/cmake/
-    └── rocblas/
-        └── rocblas-config.cmake
+rocm-libraries/rocBLAS/                       ← SOURCE (raw C++ code)
+        ↓ cmake + ninja
+build/math-libs/BLAS/rocBLAS/build/           ← BUILD (compiled .o, .so)
+        ↓ ninja install
+build/math-libs/BLAS/rocBLAS/stage/           ← STAGE (organized for /opt/rocm/)
+        ↓ ninja artifacts (reads artifact-blas.toml)
+build/artifacts/therock-blas-linux-*.tar.xz   ← PACKAGE (final distributable)
 ```
 
 **Why "portable"?**
