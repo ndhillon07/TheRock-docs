@@ -2069,52 +2069,60 @@ Before we look at what's inside a `.tar.xz` file, let's understand how it's crea
 
 **Step-by-Step: How rocBLAS Goes from Source Code to .tar.xz Package**
 
-```
-STEP 1: Source Code Location (Git Submodule)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Location: rocm-libraries/rocBLAS/
+#### STEP 1: Source Code Location (Git Submodule)
+
+**Location:** `rocm-libraries/rocBLAS/`
 
 This is where the raw C++ source code lives:
-  rocm-libraries/rocBLAS/library/src/blas1/rocblas_axpy.cpp
-  rocm-libraries/rocBLAS/library/src/blas2/rocblas_gemv.cpp
-  rocm-libraries/rocBLAS/library/src/blas3/rocblas_gemm.cpp
-  rocm-libraries/rocBLAS/CMakeLists.txt
 
-Git submodule definition (.gitmodules):
-  [submodule "rocm-libraries"]
-    path = rocm-libraries
-    url = https://github.com/ROCm/rocm-libraries
+```
+rocm-libraries/rocBLAS/library/src/blas1/rocblas_axpy.cpp
+rocm-libraries/rocBLAS/library/src/blas2/rocblas_gemv.cpp
+rocm-libraries/rocBLAS/library/src/blas3/rocblas_gemm.cpp
+rocm-libraries/rocBLAS/CMakeLists.txt
+```
 
-This is the SOURCE - uncompiled C++ code
+**Git submodule definition** (`.gitmodules`):
+```ini
+[submodule "rocm-libraries"]
+  path = rocm-libraries
+  url = https://github.com/ROCm/rocm-libraries
+```
 
-      ↓ cmake configure + ninja build
+**This is the SOURCE** - uncompiled C++ code
 
-STEP 2: Build Directory (CMake Compilation)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Location: build/math-libs/BLAS/rocBLAS/build/
+↓ *cmake configure + ninja build*
 
-CMake command that creates this:
-  cmake -B build/math-libs/BLAS/rocBLAS/build \
-        -S rocm-libraries/rocBLAS \
-        -DCMAKE_INSTALL_PREFIX=build/math-libs/BLAS/rocBLAS/stage \
-        -DAMDGPU_TARGETS=gfx942
+#### STEP 2: Build Directory (CMake Compilation)
 
-What happens here:
-  • C++ source files are compiled to object files (.o)
-  • Object files are linked into librocblas.so.4.0.0
-  • Kernel databases are generated (TensileLibrary_gfx942.dat)
-  • Test binaries are built (rocblas-bench, rocblas-test)
+**Location:** `build/math-libs/BLAS/rocBLAS/build/`
 
-Files in build/:
-  build/math-libs/BLAS/rocBLAS/build/library/src/librocblas.so.4.0.0
-  build/math-libs/BLAS/rocBLAS/build/library/src/blas1/CMakeFiles/rocblas_axpy.o
-  build/math-libs/BLAS/rocBLAS/build/clients/benchmarks/rocblas-bench
+**CMake command that creates this:**
+```bash
+cmake -B build/math-libs/BLAS/rocBLAS/build \
+      -S rocm-libraries/rocBLAS \
+      -DCMAKE_INSTALL_PREFIX=build/math-libs/BLAS/rocBLAS/stage \
+      -DAMDGPU_TARGETS=gfx942
+```
 
-This is the BUILD OUTPUT - compiled binaries, but not yet organized for installation
+**What happens here:**
+- C++ source files are compiled to object files (.o)
+- Object files are linked into librocblas.so.4.0.0
+- Kernel databases are generated (TensileLibrary_gfx942.dat)
+- Test binaries are built (rocblas-bench, rocblas-test)
 
-      ↓ ninja install (copies files to install prefix)
+**Files in build/:**
+```
+build/math-libs/BLAS/rocBLAS/build/library/src/librocblas.so.4.0.0
+build/math-libs/BLAS/rocBLAS/build/library/src/blas1/CMakeFiles/rocblas_axpy.o
+build/math-libs/BLAS/rocBLAS/build/clients/benchmarks/rocblas-bench
+```
 
-STEP 3: Stage Directory (CMake Install Tree)
+**This is the BUILD OUTPUT** - compiled binaries, but not yet organized for installation
+
+↓ *ninja install (copies files to install prefix)*
+
+#### STEP 3: Stage Directory (CMake Install Tree)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Location: build/math-libs/BLAS/rocBLAS/stage/
 
@@ -2136,12 +2144,12 @@ Files in stage/:
 
 This is the INSTALL TREE - organized exactly like it will appear in /opt/rocm/
 
-      ↓ Packaging system reads artifact-blas.toml
+↓ *Packaging system reads artifact-blas.toml*
 
-STEP 4: Package Selection (artifact-blas.toml)
+#### STEP 4: Package Selection (artifact-blas.toml)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Location: math-libs/BLAS/artifact-blas.toml
-```
+
+**Location:** `math-libs/BLAS/artifact-blas.toml`
 
 This TOML file defines how to slice the stage/ directory into multiple .tar.xz packages:
 
@@ -2171,38 +2179,42 @@ include = [
 ]
 ```
 
-What this means:
-  • Path "math-libs/BLAS/rocBLAS/stage" points to the install tree
-  • include = [...] patterns select files from that tree
-  • Multiple [components.*] sections split files into logical groups
+**What this means:**
+- Path `"math-libs/BLAS/rocBLAS/stage"` points to the install tree
+- `include = [...]` patterns select files from that tree
+- Multiple `[components.*]` sections split files into logical groups
 
-This is the SELECTION RULES - which files go into the final package
+**This is the SELECTION RULES** - which files go into the final package
 
-      ↓ ninja artifacts (runs packaging)
+↓ *ninja artifacts (runs packaging)*
 
-STEP 5: Final Package (.tar.xz)
+#### STEP 5: Final Package (.tar.xz)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Location: build/artifacts/therock-blas-linux-gfx94X-dcgpu.tar.xz
 
-Command that creates this:
-  ninja -C build artifacts
+**Location:** `build/artifacts/therock-blas-linux-gfx94X-dcgpu.tar.xz`
 
-What happens:
-  1. Reads artifact-blas.toml
-  2. Collects matching files from build/math-libs/BLAS/rocBLAS/stage/
-  3. Creates .tar.xz archive with selected files
-  4. Names it: therock-{artifact}-{platform}-{gpu}.tar.xz
-
-Final archive contents:
-  therock-blas-linux-gfx94X-dcgpu.tar.xz contains:
-    lib/librocblas.so.4.0.0
-    lib/librocblas.so.4 → librocblas.so.4.0.0
-    lib/rocblas/library/TensileLibrary_gfx942.dat
-    include/rocblas/rocblas.h
-    lib/cmake/rocblas/rocblas-config.cmake
-
-This is the FINAL PACKAGE - ready to distribute and install
+**Command that creates this:**
+```bash
+ninja -C build artifacts
 ```
+
+**What happens:**
+1. Reads artifact-blas.toml
+2. Collects matching files from build/math-libs/BLAS/rocBLAS/stage/
+3. Creates .tar.xz archive with selected files
+4. Names it: `therock-{artifact}-{platform}-{gpu}.tar.xz`
+
+**Final archive contents:**
+```
+therock-blas-linux-gfx94X-dcgpu.tar.xz contains:
+  lib/librocblas.so.4.0.0
+  lib/librocblas.so.4 → librocblas.so.4.0.0
+  lib/rocblas/library/TensileLibrary_gfx942.dat
+  include/rocblas/rocblas.h
+  lib/cmake/rocblas/rocblas-config.cmake
+```
+
+**This is the FINAL PACKAGE** - ready to distribute and install
 
 **Key Points:**
 
