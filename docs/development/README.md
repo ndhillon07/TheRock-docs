@@ -29,6 +29,7 @@
 
 - [Workflows Architecture](workflows_architecture.md)
 - [Workflow Call Chains](workflow_call_chains.md)
+- **[Exact CI Flow](EXACT_CI_FLOW.md)** - Deep dive: how configure_ci.py, BUILD_TOPOLOGY.toml, and amdgpu_family_matrix.py interact; proves generic builds are done once and reused
 - [Release and Nightly Builds](release_and_nightly_builds.md)
 - [GitHub Actions Debugging](github_actions_debugging.md)
 - [CI Behavior Manipulation](ci_behavior_manipulation.md)
