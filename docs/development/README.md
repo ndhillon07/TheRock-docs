@@ -14,6 +14,7 @@
 - [Development Guide](development_guide.md)
 - [Installing Artifacts](installing_artifacts.md)
 - [Sanitizers](sanitizers.md)
+- **[Python Packaging Complete Guide](python_packaging_complete_guide.md)** - Self-contained guide from source code to pip installation
 
 ### Testing
 
