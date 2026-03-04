@@ -2355,14 +2355,27 @@ ninja -C build
 # 4. Create component artifacts
 ninja -C build artifacts
 
-# This produces:
+# This produces TWO things:
+#
+# A) Raw component directories (NOT uploaded to S3):
 # build/artifacts/
-# ├── therock-base-linux-gfx94X-dcgpu.tar.xz
+# ├── blas_lib_gfx94X/         ← Runtime library component only
+# ├── blas_dev_gfx94X/         ← Development files component only
+# ├── blas_test_gfx94X/        ← Test binaries component only
+# ├── blas_dbg_gfx94X/         ← Debug symbols component only
+# ├── blas_doc_gfx94X/         ← Documentation component only
+# └── ... (same for fft, rand, solver, etc.)
+#
+# B) Bundled .tar.xz archives (THESE get uploaded to S3):
+# build/artifacts/
+# ├── therock-base-linux-gfx94X-dcgpu.tar.xz    ← All base components bundled
 # ├── therock-compiler-linux-gfx94X-dcgpu.tar.xz
 # ├── therock-core-linux-gfx94X-dcgpu.tar.xz
-# └── therock-blas-linux-gfx94X-dcgpu.tar.xz
+# ├── therock-blas-linux-gfx94X-dcgpu.tar.xz    ← All blas components (lib+dev+test+dbg+doc) bundled
+# ├── therock-fft-linux-gfx94X-dcgpu.tar.xz     ← All fft components bundled
+# └── ... (one .tar.xz per artifact)
 
-# 5. Upload to S3
+# 5. Upload to S3 (ONLY .tar.xz files, NOT raw directories)
 python ./build_tools/github_actions/post_build_upload.py \
   --artifact-dir build/artifacts/ \
   --s3-bucket therock-ci-artifacts \
@@ -2385,6 +2398,13 @@ s3://therock-ci-artifacts/21440027240-linux/
 └── ... (one .tar.xz per artifact)
 ```
 
+**Important Notes:**
+
+1. **Only `.tar.xz` files are uploaded to S3**, not the raw component directories
+2. **Each `.tar.xz` contains ALL components bundled together** (lib + dev + test + dbg + doc)
+3. The raw component directories (`blas_lib_gfx94X/`, `blas_dev_gfx94X/`, etc.) remain in the build machine's `build/artifacts/` directory but are NOT uploaded
+4. Later packaging stages (Python/DEB/RPM) download these bundled `.tar.xz` files and split them back into separate packages
+
 The `index-gfx94X-dcgpu.html` is a simple web page listing all files, making it easy to download them.
 
 ### The Build Process (Windows)
@@ -2404,7 +2424,10 @@ s3://therock-ci-artifacts/21440027240-windows/
 ├── index-gfx94X-dcgpu.html
 ├── therock-base-windows-gfx94X-dcgpu.tar.xz
 ├── therock-compiler-windows-gfx94X-dcgpu.tar.xz
-└── ... (one per component)
+├── therock-core-windows-gfx94X-dcgpu.tar.xz
+├── therock-blas-windows-gfx94X-dcgpu.tar.xz
+├── therock-fft-windows-gfx94X-dcgpu.tar.xz
+└── ... (one .tar.xz per artifact, each containing all components bundled)
 ```
 
 ### Artifact Slicing: One Build → Multiple .tar.xz Files
