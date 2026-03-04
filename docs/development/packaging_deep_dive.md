@@ -143,82 +143,362 @@ Any build variant can be packaged into any package type. For example:
 
 ## Part 2: Stage 0 - Source Code Organization
 
-Before we build anything, let's understand how source code is organized.
+Before we build anything, let's understand how TheRock knows what to build and how it's organized.
 
-### The BUILD_TOPOLOGY.toml File
+### The Master Blueprint: BUILD_TOPOLOGY.toml
 
-This is the master configuration file that defines the entire build. It has a 4-level hierarchy:
+ROCm has dozens of components (compilers, libraries, tools). BUILD_TOPOLOGY.toml is the master configuration file that answers these questions:
+
+- What are all the components?
+- Which git repositories do we need?
+- What depends on what?
+- How should we group them for building and packaging?
+
+**Location:** `/BUILD_TOPOLOGY.toml` (root of TheRock repository)
+
+**Format:** TOML (Tom's Obvious Minimal Language) - a simple config file format
+
+### How BUILD_TOPOLOGY.toml is Processed
+
+This is the critical part: **BUILD_TOPOLOGY.toml is NOT read directly by CMake**. Instead:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ STEP 1: CMake Configure Time                                │
+│ (happens when you run: cmake -B build)                      │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ↓
+┌─────────────────────────────────────────────────────────────┐
+│ CMake executes a Python script:                             │
+│                                                              │
+│   execute_process(                                          │
+│     COMMAND python3 build_tools/topology_to_cmake.py        │
+│       --topology BUILD_TOPOLOGY.toml                        │
+│       --output build/cmake/therock_topology.cmake           │
+│   )                                                          │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ↓
+┌─────────────────────────────────────────────────────────────┐
+│ STEP 2: Python Script Reads TOML and Generates CMake        │
+│                                                              │
+│ topology_to_cmake.py:                                       │
+│   1. Parses BUILD_TOPOLOGY.toml                             │
+│   2. Validates dependencies                                 │
+│   3. Computes build order                                   │
+│   4. Generates CMake code:                                  │
+│      - therock_add_feature() calls                          │
+│      - CMake targets (artifact-blas, etc.)                  │
+│      - Dependency variables                                 │
+│                                                              │
+│ Output: build/cmake/therock_topology.cmake                  │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ↓
+┌─────────────────────────────────────────────────────────────┐
+│ STEP 3: CMake Includes Generated File                       │
+│                                                              │
+│   include(build/cmake/therock_topology.cmake)               │
+│                                                              │
+│ This creates:                                                │
+│   - THEROCK_ENABLE_MATH_LIBS cache variable (ON/OFF)        │
+│   - THEROCK_ENABLE_BLAS cache variable (ON/OFF)             │
+│   - CMake targets: artifact-blas, stage-math-libs           │
+│   - Build order list: THEROCK_BUILD_ORDER                   │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ↓
+┌─────────────────────────────────────────────────────────────┐
+│ STEP 4: CMake Build System Uses Generated Info              │
+│                                                              │
+│ When you run: ninja -C build                                │
+│   - Builds only enabled features                            │
+│   - Respects dependency order                               │
+│   - Creates artifact .tar.xz files                          │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Key insight:** BUILD_TOPOLOGY.toml is a data file, not a build script. Python reads it once at configure time and translates it to CMake code.
+
+### The 4-Level Hierarchy
+
+BUILD_TOPOLOGY.toml organizes ROCm using four levels of abstraction:
+
+```
+LEVEL 1: Source Sets      (where is the code?)
+   ↓
+LEVEL 2: Build Stages     (how do we organize CI/CD jobs?)
+   ↓
+LEVEL 3: Artifact Groups  (how do we group related components?)
+   ↓
+LEVEL 4: Artifacts        (what are the actual .tar.xz files?)
+```
+
+Let's understand each level with concrete examples.
+
+### Level 1: Source Sets
+
+**What they are:** Groupings of git submodules
+
+**Why they exist:** TheRock has 20+ git submodules. CI jobs don't need all of them. Source sets let CI clone only what's needed.
+
+**Example:**
 
 ```toml
-# BUILD_TOPOLOGY.toml
+[source_sets.compilers]
+description = "Compiler toolchain submodules"
+submodules = ["llvm-project", "HIPIFY", "spirv-llvm-translator"]
 
-# LEVEL 1: Source Sets (where is the code?)
-[source_sets.compiler.amd-llvm]
-url = "https://github.com/ROCm/llvm-project.git"
-branch = "amd-staging"
+[source_sets.math-libs]
+description = "Additional math library submodules"
+submodules = ["libhipcxx"]
 
-[source_sets.math-libs.rocBLAS]
-url = "https://github.com/ROCm/rocBLAS.git"
-branch = "develop"
+[source_sets.rocm-libraries]
+description = "ROCm libraries monorepo (math libs)"
+submodules = ["rocm-libraries"]  # This contains rocBLAS, rocFFT, etc.
+```
 
-# LEVEL 2: Build Stages (how do we organize the builds?)
-[build_stages.compiler]
-all_targets = ["amd-llvm", "hipify"]
+**What happens:**
 
-[build_stages."math-libs"]
-all_targets = ["rocBLAS", "rocFFT", "rocRAND"]
+```bash
+# Full checkout (gets all submodules)
+./build_tools/fetch_sources.py
 
-# LEVEL 3: Artifact Groups (how do we bundle for distribution?)
-[artifact_groups.compiler]
-build_stage = "compiler"
-platform_artifacts = ["compiler"]
+# Partial checkout (only compiler sources)
+./build_tools/fetch_sources.py --stage compiler-runtime
+```
 
-[artifact_groups."math-libs"]
-build_stage = "math-libs"
-platform_artifacts = ["blas", "fft", "rand"]
+**Fundamental concept:** Source sets are about **git repositories**, not build logic. They're just a convenience for partial checkouts.
 
-# LEVEL 4: Artifacts (what files go into each package?)
+### Level 2: Build Stages
+
+**What they are:** Groups of components that build together in a single CI job
+
+**Why they exist:** ROCm takes 4-8 hours to build everything. Build stages let CI parallelize by running multiple independent jobs.
+
+**Example:**
+
+```toml
+[build_stages.foundation]
+description = "Foundation - critical path dependencies"
+artifact_groups = ["third-party-sysdeps", "base"]
+
+[build_stages.compiler-runtime]
+description = "Compiler, runtimes, and core profiling"
+artifact_groups = [
+    "compiler",
+    "core-runtime",
+    "hip-runtime",
+    "profiler-core"
+]
+
+[build_stages.math-libs]
+description = "Math and ML libraries per architecture"
+artifact_groups = ["math-libs", "ml-libs"]
+type = "per-arch"  # This means: run once per GPU family
+
+[build_stages.comm-libs]
+description = "Communication libraries per architecture"
+artifact_groups = ["comm-libs"]
+type = "per-arch"
+```
+
+**What happens in CI:**
+
+```
+┌───────────────┐
+│ foundation    │  (Job 1: builds third-party deps and base)
+└───────┬───────┘
+        │
+        ↓
+┌────────────────────┐
+│ compiler-runtime   │  (Job 2: builds compiler and HIP runtime)
+└───────┬────────────┘
+        │
+        ├─────────────┬─────────────┐
+        ↓             ↓             ↓
+┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+│ math-libs    │ │ math-libs    │ │ comm-libs    │
+│ (gfx94X)     │ │ (gfx1100)    │ │ (gfx94X)     │
+└──────────────┘ └──────────────┘ └──────────────┘
+  Job 3           Job 4            Job 5
+  (parallel)      (parallel)       (parallel)
+```
+
+**Fundamental concepts:**
+
+1. **Build stage ≠ sequential step** - Many stages run in parallel
+2. **type = "per-arch"** means CI creates one job per GPU family
+3. **Stages define CI job boundaries**, not build system behavior
+
+### Level 3: Artifact Groups
+
+**What they are:** Logical groupings of related artifacts with shared dependencies
+
+**Why they exist:** Components often have common dependencies and should be built together. Artifact groups express these relationships.
+
+**Example:**
+
+```toml
+[artifact_groups.math-libs]
+description = "Math libraries (BLAS, FFT, etc.)"
+type = "per-arch"  # Built separately for each GPU family
+source_sets = ["rocm-libraries", "math-libs"]  # Which git repos needed
+artifact_group_deps = ["hip-runtime"]  # Depends on HIP being built first
+
+[artifact_groups.ml-libs]
+description = "ML libraries (MIOpen, etc.)"
+type = "per-arch"
+artifact_group_deps = ["math-libs", "hip-runtime"]  # Depends on math libs + HIP
+```
+
+**What this means:**
+
+```
+Artifact group dependencies:
+  ml-libs depends on → math-libs → hip-runtime
+
+Build order (computed automatically):
+  1. hip-runtime  (no dependencies)
+  2. math-libs    (depends on hip-runtime)
+  3. ml-libs      (depends on math-libs and hip-runtime)
+```
+
+**Fundamental concepts:**
+
+1. **Artifact groups are about dependencies** - what needs what
+2. **type = "per-arch"** means each GPU family gets separate builds
+3. **This is still metadata** - Python script uses this to compute build order
+
+### Level 4: Artifacts
+
+**What they are:** Individual `.tar.xz` files - the actual build outputs
+
+**Why they exist:** This is the fundamental packaging unit. One artifact = one `.tar.xz` file.
+
+**Example:**
+
+```toml
+[artifacts.blas]
+artifact_group = "math-libs"           # Belongs to math-libs group
+type = "target-specific"               # Each GPU family gets separate file
+artifact_deps = ["core-hip"]           # Needs HIP runtime
+feature_name = "BLAS"                  # Creates THEROCK_ENABLE_BLAS variable
+feature_group = "MATH_LIBS"            # Groups with other math lib options
+split_databases = ["rocblas"]          # Special handling for kernel databases
+
 [artifacts.compiler]
 artifact_group = "compiler"
-type = "generic"  # All GPUs use same compiler
+type = "target-neutral"                # One build for all GPU families
+feature_name = "COMPILER"
+feature_group = "COMPILER"
+```
 
+**What this creates:**
+
+```cmake
+# Generated by topology_to_cmake.py in build/cmake/therock_topology.cmake:
+
+# Feature declaration (creates cache variable)
+therock_add_feature(BLAS
+  GROUP MATH_LIBS
+  DESCRIPTION "Enables blas"
+  REQUIRES HIP_RUNTIME  # Translated from artifact_deps
+)
+
+# This creates:
+#   THEROCK_ENABLE_BLAS = ON/OFF  (user can toggle)
+
+# CMake target
+add_custom_target(artifact-blas
+  COMMENT "Building artifact blas"
+)
+
+# Metadata for packaging
+set(THEROCK_ARTIFACT_TYPE_blas "target-specific")
+set(THEROCK_ARTIFACT_GROUP_blas "math-libs")
+set(THEROCK_ARTIFACT_SPLIT_DATABASES_blas "rocblas")
+```
+
+**Fundamental concepts:**
+
+1. **Artifact = one .tar.xz file** - this is the concrete output
+2. **type values:**
+   - `target-neutral`: Built once for all GPUs (e.g., compiler, headers)
+   - `target-specific`: Built separately per GPU (e.g., rocBLAS kernels)
+3. **Each artifact creates:**
+   - A CMake feature flag (`THEROCK_ENABLE_BLAS`)
+   - A CMake target (`artifact-blas`)
+   - Metadata variables for packaging
+
+### Putting It All Together: rocBLAS Example
+
+Let's trace rocBLAS through all four levels:
+
+```toml
+# LEVEL 1: Source Set
+[source_sets.rocm-libraries]
+submodules = ["rocm-libraries"]  # Git repo containing rocBLAS source
+
+# LEVEL 2: Build Stage
+[build_stages.math-libs]
+artifact_groups = ["math-libs"]  # This stage builds math libraries
+type = "per-arch"                # Run once per GPU family
+
+# LEVEL 3: Artifact Group
+[artifact_groups.math-libs]
+type = "per-arch"
+artifact_group_deps = ["hip-runtime"]  # Needs HIP first
+
+# LEVEL 4: Artifact
 [artifacts.blas]
 artifact_group = "math-libs"
-type = "target-specific"  # Different builds for different GPUs
-artifact_deps = ["core-hip"]  # Depends on HIP runtime
+type = "target-specific"
+artifact_deps = ["core-hip"]
 ```
 
-**What this means in practice:**
+**What happens when you build:**
 
-- **Source sets** tell CMake which git repositories to use
-- **Build stages** group related components (they build together)
-- **Artifact groups** organize the build outputs (they package together)
-- **Artifacts** define individual `.tar.xz` files (one per component)
+```bash
+# 1. CMake configure - Python reads BUILD_TOPOLOGY.toml
+cmake -B build -DTHEROCK_ENABLE_BLAS=ON -DTHEROCK_AMDGPU_FAMILIES=gfx94X-dcgpu
 
-### Example: Following rocBLAS Through the Topology
+# Generated CMake code creates:
+#   THEROCK_ENABLE_BLAS = ON
+#   artifact-blas target
+#   Dependencies: artifact-blas depends on artifact-core-hip
 
-Let's trace the rocBLAS library:
+# 2. Build
+ninja -C build artifact-blas
 
-```
-SOURCE SET: math-libs.rocBLAS
-   ↓
-   git clone https://github.com/ROCm/rocBLAS.git
-   ↓
-BUILD STAGE: math-libs
-   ↓
-   CMake builds: rocBLAS + rocFFT + rocRAND + ...
-   ↓
-ARTIFACT GROUP: math-libs
-   ↓
-   Collects build outputs from all math libraries
-   ↓
-ARTIFACT: blas
-   ↓
-   Creates: therock-blas-linux-gfx94X.tar.xz
-   Contains: librocblas.so, rocblas-bench, headers, CMake files
+# CMake:
+#   1. Checks if THEROCK_ENABLE_BLAS=ON (yes)
+#   2. Builds dependencies first (core-hip)
+#   3. Builds rocBLAS
+#   4. Creates: build/artifacts/therock-blas-linux-gfx94X-dcgpu.tar.xz
+
+# 3. CI uploads to S3
+#   s3://therock-ci-artifacts/{run_id}-linux/therock-blas-linux-gfx94X-dcgpu.tar.xz
 ```
 
-This `.tar.xz` file is what Stage 2 packaging workflows will download and repackage.
+### Summary: The Four Levels in Simple Terms
+
+| Level | What | Example | Why |
+|---|---|---|---|
+| **Source Set** | Git submodules to clone | `rocm-libraries` | Partial checkouts for CI |
+| **Build Stage** | CI job boundary | `math-libs` | Parallelize builds |
+| **Artifact Group** | Logical grouping with deps | `math-libs` group | Express dependencies |
+| **Artifact** | Actual .tar.xz file | `blas` artifact | Fundamental packaging unit |
+
+**The key insight:**
+
+- **Source sets** → About **git repositories**
+- **Build stages** → About **CI/CD parallelization**
+- **Artifact groups** → About **dependency relationships**
+- **Artifacts** → About **packaging outputs** (.tar.xz files)
+
+These are different dimensions of organization, not a strict hierarchy. The same artifact (like `blas`) participates in all four levels for different reasons.
 
 ---
 
