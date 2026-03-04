@@ -1561,6 +1561,85 @@ A portable artifact is a `.tar.xz` file containing everything needed for one com
 
 Extract it and you get:
 
+**CRITICAL: Understanding the directory path structure**
+
+Before showing the contents, let's decode this path: `math-libs/BLAS/rocBLAS/stage/`
+
+```
+math-libs/BLAS/rocBLAS/stage/
+    ↑         ↑      ↑       ↑
+    │         │      │       └─ stage/ = CMake install tree (where files are "staged" before packaging)
+    │         │      └─ rocBLAS = Actual project name (the real library/component)
+    │         └─ BLAS = Artifact name (from BUILD_TOPOLOGY.toml [artifacts.blas])
+    └─ math-libs = Artifact group name (from BUILD_TOPOLOGY.toml)
+```
+
+**The Naming Convention:**
+
+| Level | Name | Where Defined | Example |
+|-------|------|--------------|---------|
+| **Artifact Group** | `math-libs` | BUILD_TOPOLOGY.toml `[artifact_groups.math-libs]` | Directory: `math-libs/` |
+| **Artifact** | `blas` | BUILD_TOPOLOGY.toml `[artifacts.blas]` | Directory: `BLAS/` (uppercase) |
+| **Project** | `rocBLAS` | CMake project name in source code | Directory: `rocBLAS/` |
+| **Install Tree** | `stage` | CMake convention (install prefix) | Directory: `stage/` |
+
+**Why two names? (blas vs rocBLAS)**
+
+- **`blas`** = Artifact name (packaging abstraction in BUILD_TOPOLOGY.toml)
+  - Used for: `.tar.xz` filename, CMake feature flags, topology organization
+  - Example: `therock-blas-linux.tar.xz`, `THEROCK_ENABLE_BLAS`
+
+- **`rocBLAS`** = Project name (actual source code repository/library)
+  - Used for: git submodule name, actual library name, CMake project name
+  - Example: `librocblas.so`, `rocblas-bench` binary, `#include <rocblas/rocblas.h>`
+
+**Where does `stage/` come from?**
+
+CMake build process for each component:
+```bash
+# 1. Configure: Point CMake to install into stage/ directory
+cmake -B build/math-libs/BLAS/rocBLAS/build \
+      -DCMAKE_INSTALL_PREFIX=build/math-libs/BLAS/rocBLAS/stage
+
+# 2. Build: Compile the library
+ninja -C build/math-libs/BLAS/rocBLAS/build
+
+# 3. Install: Copy built files to stage/ (the "install tree")
+ninja -C build/math-libs/BLAS/rocBLAS/build install
+
+# Result: build/math-libs/BLAS/rocBLAS/stage/ contains:
+#   - lib/librocblas.so.4.0.0
+#   - include/rocblas/rocblas.h
+#   - bin/rocblas-bench
+#   - etc.
+```
+
+The `stage/` directory is the CMake **install tree** - where files are organized
+in the final runtime layout (lib/, include/, bin/) before being packaged into
+`.tar.xz` files.
+
+**File: `math-libs/BLAS/artifact-blas.toml`**
+
+This file tells the packaging system which files to include from `stage/`:
+
+```toml
+# What files to grab from the stage/ directory
+[components.lib."math-libs/BLAS/rocBLAS/stage"]
+include = [
+  "bin/rocblas/library/**",      # Kernel library data files
+  "lib/rocblas/library/**",      # More kernel data
+  "lib/librocblas.so*",          # The actual library
+  "include/rocblas/**",          # Header files
+]
+```
+
+The path `math-libs/BLAS/rocBLAS/stage` means:
+- Look in the build directory at this path
+- The `stage/` subdirectory contains the CMake install tree
+- Extract only the files matching the `include` patterns
+
+**Now here's what's inside:**
+
 ```
 math-libs/BLAS/rocBLAS/stage/
 ├── bin/
