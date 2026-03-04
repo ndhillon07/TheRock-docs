@@ -453,6 +453,7 @@ When developers push code to GitHub, CI automatically:
 [build_stages.foundation]
 description = "Foundation - critical path dependencies"
 artifact_groups = ["third-party-sysdeps", "base"]
+# No dependencies - this runs first
 
 [build_stages.compiler-runtime]
 description = "Compiler, runtimes, and core profiling"
@@ -462,16 +463,19 @@ artifact_groups = [
     "hip-runtime",
     "profiler-core"
 ]
+# Dependencies: Needs foundation (see artifact_groups dependencies below)
 
 [build_stages.math-libs]
 description = "Math and ML libraries per architecture"
 artifact_groups = ["math-libs", "ml-libs"]
 type = "per-arch"  # Special: run once per GPU family
+# Dependencies: Needs compiler-runtime (see artifact_groups dependencies below)
 
 [build_stages.comm-libs]
 description = "Communication libraries per architecture"
 artifact_groups = ["comm-libs"]
 type = "per-arch"
+# Dependencies: Needs compiler-runtime (can run parallel with math-libs)
 ```
 
 **Wait - where are the dependencies?**
