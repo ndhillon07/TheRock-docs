@@ -14,7 +14,7 @@
 - [Development Guide](development_guide.md)
 - [Installing Artifacts](installing_artifacts.md)
 - [Sanitizers](sanitizers.md)
-- **[Python Packaging Complete Guide](python_packaging_complete_guide.md)** - Self-contained guide from source code to pip installation
+- **[Packaging Deep Dive](packaging_deep_dive.md)** - Complete guide covering all packaging types: portable artifacts → Python wheels, native Linux packages (DEB/RPM), and Windows packages
 
 ### Testing
 
