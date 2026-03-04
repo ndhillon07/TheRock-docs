@@ -1300,47 +1300,116 @@ Speedup: 3.2x
 
 #### Concrete Example: What Runs Where
 
-**build_stages.math-libs builds these components:**
+**CRITICAL: WHERE does the cmake command run? How does it know what to build?**
 
 ```bash
-# One CI job for gfx94X:
-cmake -B build -DTHEROCK_AMDGPU_FAMILIES=gfx94X-dcgpu
+# CI Job for gfx94X (runs on one Azure machine)
+
+# STEP 1: WHERE - Run from TheRock monorepo root
+cd /home/runner/work/TheRock/TheRock  # ← Monorepo root directory
+
+# STEP 2: HOW - CMake flags determine what gets built
+cmake -B build \
+  -DTHEROCK_AMDGPU_FAMILIES=gfx94X-dcgpu \
+  -DTHEROCK_ENABLE_MATH_LIBS=ON \        # ← This enables math-libs components
+  -DTHEROCK_ENABLE_BLAS=ON \             # ← Specifically enable rocBLAS
+  -DTHEROCK_ENABLE_FFT=ON \              # ← Specifically enable rocFFT
+  -DTHEROCK_ENABLE_RAND=ON \             # ← Specifically enable rocRAND
+  -DTHEROCK_ENABLE_MIOPEN=ON             # ← Specifically enable MIOpen
+
+# What happens during CMake configure (in plain English):
+# CMake is a build system generator - it creates the instructions for how to compile code.
+#
+# When you run "cmake -B build -DTHEROCK_ENABLE_BLAS=ON":
+#   1. CMake reads BUILD_TOPOLOGY.toml (via Python script)
+#   2. Sees that "blas" artifact is in the "math-libs" group
+#   3. Sees THEROCK_ENABLE_BLAS=ON flag (user wants rocBLAS)
+#   4. Tells the build system: "Include rocBLAS source code in the build"
+#   5. Repeats for FFT, RAND, MIOpen (all enabled with =ON flags)
+#
+# Think of it like checking boxes on a form:
+#   ☑ Build rocBLAS
+#   ☑ Build rocFFT
+#   ☑ Build rocRAND
+#   ☑ Build MIOpen
+#   ☐ Build rocSOLVER (not enabled, so skip this)
+
+# STEP 3: Build ALL enabled components in one command
 ninja -C build
+# "ninja" is the actual compiler tool that builds C++ code
+# One command builds everything that was enabled above
 
-# This compiles (inside one job):
-- rocBLAS  (optimized for MI300 GPUs)
-- rocFFT   (optimized for MI300 GPUs)
-- rocRAND  (optimized for MI300 GPUs)
-- MIOpen   (ML library for MI300 GPUs)
+# How does one command build multiple projects?
+# TheRock's structure (simplified):
+#
+# TheRock/                              ← Monorepo root (where you run cmake)
+#   CMakeLists.txt                      ← Main build file says "if BLAS enabled, build it"
+#   ├── math-libs/BLAS/CMakeLists.txt   ← This says "build rocBLAS from rocm-libraries/"
+#   ├── math-libs/FFT/CMakeLists.txt    ← This says "build rocFFT from rocm-libraries/"
+#   └── rocm-libraries/                 ← Git submodule with actual source code
+#       ├── rocBLAS/                    ← Real C++ code for BLAS
+#       ├── rocFFT/                     ← Real C++ code for FFT
+#       └── rocRAND/                    ← Real C++ code for RAND
+#
+# When ninja runs:
+#   1. Compiles rocm-libraries/rocBLAS/*.cpp → librocblas.so
+#   2. Compiles rocm-libraries/rocFFT/*.cpp → librocfft.so
+#   3. Compiles rocm-libraries/rocRAND/*.cpp → librocrand.so
+#   4. Compiles MIOpen/*.cpp → libMIOpen.so
+#
+# All at once, using all CPU cores
 
-# Produces:
-- therock-blas-linux-gfx94X-dcgpu.tar.xz
-- therock-fft-linux-gfx94X-dcgpu.tar.xz
-- therock-rand-linux-gfx94X-dcgpu.tar.xz
-- therock-miopen-linux-gfx94X-dcgpu.tar.xz
+# Each component builds into its own subdirectory:
+build/
+├── math-libs/BLAS/rocBLAS/build/    ← rocBLAS builds here
+├── math-libs/FFT/rocFFT/build/      ← rocFFT builds here
+├── math-libs/RAND/rocRAND/build/    ← rocRAND builds here
+└── ml-libs/MIOpen/MIOpen/build/     ← MIOpen builds here
+
+# STEP 4: Package artifacts
+ninja -C build artifacts
+
+# Produces (all in build/artifacts/):
+- therock-blas-linux-gfx94X-dcgpu.tar.xz    ← from math-libs/BLAS/rocBLAS/stage/
+- therock-fft-linux-gfx94X-dcgpu.tar.xz     ← from math-libs/FFT/rocFFT/stage/
+- therock-rand-linux-gfx94X-dcgpu.tar.xz    ← from math-libs/RAND/rocRAND/stage/
+- therock-miopen-linux-gfx94X-dcgpu.tar.xz  ← from ml-libs/MIOpen/MIOpen/stage/
 ```
+
+**Key Insights:**
+
+1. **WHERE**: Always run from TheRock monorepo root (top-level directory)
+2. **HOW**: CMake flags (`THEROCK_ENABLE_*`) determine which components build
+3. **WHAT**: TheRock's top-level CMakeLists.txt includes component subdirectories based on enabled flags
+4. **STRUCTURE**: Each component builds in its own `build/.../build/` subdirectory
+5. **OUTPUT**: All `.tar.xz` files go to `build/artifacts/` regardless of where component built
 
 **Simultaneously, another CI job for gfx1100:**
 
 ```bash
-# Different machine, same stage, different GPU
-cmake -B build -DTHEROCK_AMDGPU_FAMILIES=gfx1100
+# Different Azure machine, same process, different GPU flag
+
+cd /home/runner/work/TheRock/TheRock  # ← Still monorepo root
+
+cmake -B build \
+  -DTHEROCK_AMDGPU_FAMILIES=gfx1100 \  # ← Only difference: GPU family
+  -DTHEROCK_ENABLE_MATH_LIBS=ON \
+  -DTHEROCK_ENABLE_BLAS=ON \
+  -DTHEROCK_ENABLE_FFT=ON \
+  -DTHEROCK_ENABLE_RAND=ON \
+  -DTHEROCK_ENABLE_MIOPEN=ON
+
 ninja -C build
+ninja -C build artifacts
 
-# Compiles:
-- rocBLAS  (optimized for RX 7000 GPUs)
-- rocFFT   (optimized for RX 7000 GPUs)
-- rocRAND  (optimized for RX 7000 GPUs)
-- MIOpen   (ML library for RX 7000 GPUs)
-
-# Produces:
-- therock-blas-linux-gfx1100.tar.xz
-- therock-fft-linux-gfx1100.tar.xz
-- therock-rand-linux-gfx1100.tar.xz
-- therock-miopen-linux-gfx1100.tar.xz
+# Produces (same components, different GPU optimization):
+- therock-blas-linux-gfx1100.tar.xz     ← rocBLAS optimized for RX 7000
+- therock-fft-linux-gfx1100.tar.xz      ← rocFFT optimized for RX 7000
+- therock-rand-linux-gfx1100.tar.xz     ← rocRAND optimized for RX 7000
+- therock-miopen-linux-gfx1100.tar.xz   ← MIOpen optimized for RX 7000
 ```
 
-**The magic:** Both jobs run at the same time on different machines!
+**The magic:** Both jobs run at the same time on different machines, each building the same components but with different GPU optimizations!
 
 #### Fundamental Concepts
 
