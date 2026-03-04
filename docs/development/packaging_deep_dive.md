@@ -519,8 +519,10 @@ steps:
 
 **Timeline showing REPEATED builds:**
 
+**Example: Building for 3 GPU families (gfx94X, gfx1100, gfx950)**
+
 ```
-T+0:00  THREE jobs start SIMULTANEOUSLY (3 separate machines):
+T+0:00  THREE jobs start SIMULTANEOUSLY (3 separate machines, 1 per GPU family):
 
         Machine A (gfx94X build):
           ├─ Builds: compiler (generic)           ← Build #1
@@ -628,6 +630,8 @@ steps:
 
 **Timeline showing artifact reuse:**
 
+**Example: Building for 3 GPU families (gfx94X, gfx1100, gfx950)**
+
 ```
 T+0:00  foundation (Machine A)
         ├─ Builds: base, sysdeps (generic for ALL GPUs)
@@ -638,7 +642,7 @@ T+2:00  compiler-runtime (Machine B)
         ├─ Builds: compiler, HIP runtime (generic for ALL GPUs)
         └─ Uploads to S3: therock-compiler-linux.tar.xz
 
-T+4:00  THREE math-libs jobs start SIMULTANEOUSLY:
+T+4:00  THREE math-libs jobs start SIMULTANEOUSLY (1 per GPU family):
 
         Machine C (gfx94X):
           ├─ Downloads from S3: therock-compiler-linux.tar.xz ← SAME FILE
@@ -1098,19 +1102,23 @@ Instead of 12 hours sequential, takes 4 hours parallel!
 
 The above describes **ci_nightly** (monolithic workflow). There's also **multi_arch** (sharded workflow) which works differently:
 
+**Example assumes building for 3 GPU families: gfx94X-dcgpu, gfx1100, gfx950-dcgpu**
+
 | Aspect | Monolithic (ci_nightly) | Sharded (multi_arch) |
 |--------|------------------------|----------------------|
 | **Job Creation** | configure_ci.py reads amdgpu_family_matrix.py ONLY | Workflow file manually defines stage jobs |
 | **Knows about stages?** | NO - just creates GPU-based jobs | YES - foundation, compiler-runtime, math-libs, etc. |
-| **Generic components** | Built 3 times (once per GPU job) | Built ONCE (foundation + compiler-runtime jobs) |
-| **Per-arch components** | Built 3 times (once per GPU job) | Built 3 times (math-libs with GPU matrix) |
+| **Generic components** | Built N times (once per GPU family) <br> **Example: 3 times for 3 GPUs** | Built ONCE (foundation + compiler-runtime jobs) |
+| **Per-arch components** | Built N times (once per GPU family) <br> **Example: 3 times for 3 GPUs** | Built N times (math-libs with GPU matrix) <br> **Example: 3 times for 3 GPUs** |
 | **Artifact sharing** | NO - each job is independent | YES - S3 via artifact_manager.py |
-| **Build time** | 4 hours (all parallel) | 5.5 hours (sequential stages) |
-| **Compute waste** | High (compiler built 3x) | Low (compiler built 1x) |
+| **Build time** | Example: 4 hours (all parallel) | Example: 5.5 hours (sequential stages) |
+| **Compute waste** | High (compiler built once per GPU) | Low (compiler built once total) |
 
 **The key difference:**
 - **Monolithic**: configure_ci.py creates simple GPU matrix, each job builds everything
+  - If building 5 GPU families → compiler built 5 times
 - **Sharded**: .github/workflows file has hardcoded stage structure, uses BUILD_TOPOLOGY.toml inside jobs
+  - No matter how many GPU families → compiler built 1 time
 
 See "Are Generic Builds Repeated in Each Matrix Job?" section below for detailed explanation with actual workflow code.
 
