@@ -310,7 +310,7 @@ description = "Additional math library submodules"
 submodules = ["libhipcxx"]
 ```
 
-**The connection:**
+**The connection to .gitmodules:**
 
 Notice that the names in `submodules = [...]` match the `[submodule "name"]` entries in `.gitmodules`:
 
@@ -321,7 +321,7 @@ submodules = ["llvm-project"]  →  [submodule "llvm-project"]
                                     url = https://github.com/ROCm/llvm-project.git
 ```
 
-**What happens when you use source sets:**
+**How to use source sets with the fetch_sources.py script:**
 
 ```bash
 # Scenario 1: Download everything (all 20+ submodules)
@@ -333,12 +333,60 @@ git submodule update --init --recursive
 
 # Scenario 2: Download only compiler sources
 ./build_tools/fetch_sources.py --stage compiler-runtime
+                                       ^^^^^^^^^^^^^^^^
+                                       This is a build stage name!
+```
 
-# This:
+**Where does "compiler-runtime" come from?**
+
+It's the name of a build stage defined later in BUILD_TOPOLOGY.toml (we'll see this in Level 2):
+
+```toml
+# BUILD_TOPOLOGY.toml (we'll explain build stages in detail later)
+
+[build_stages.compiler-runtime]    ← The name "compiler-runtime" comes from here!
+                ^^^^^^^^^^^^^^^^
+description = "Compiler, runtimes, and core profiling"
+artifact_groups = ["compiler", "core-runtime", "hip-runtime", "profiler-core"]
+```
+
+**The connection:**
+
+```
+Command line:
+  ./build_tools/fetch_sources.py --stage compiler-runtime
+                                           ↓
+                        Looks up this name in BUILD_TOPOLOGY.toml
+                                           ↓
+BUILD_TOPOLOGY.toml:
+  [build_stages.compiler-runtime]
+  artifact_groups = ["compiler", ...]
+                         ↓
+                    Looks up which source_sets the "compiler" artifact_group needs
+                         ↓
+  [artifact_groups.compiler]
+  source_sets = ["compilers"]  ← Needs the "compilers" source set
+                         ↓
+                    Downloads those submodules
+                         ↓
+  [source_sets.compilers]
+  submodules = ["llvm-project", "HIPIFY", "spirv-llvm-translator"]
+                         ↓
+               Only downloads these 3 submodules from .gitmodules
+```
+
+**What actually happens:**
+
+```bash
+./build_tools/fetch_sources.py --stage compiler-runtime
+
+# Script does:
 #   1. Reads BUILD_TOPOLOGY.toml
 #   2. Finds build_stages.compiler-runtime
-#   3. Looks up which source_sets it needs
-#   4. Downloads only those submodules (llvm-project, HIPIFY, spirv-llvm-translator)
+#   3. Gets its artifact_groups: ["compiler", "core-runtime", "hip-runtime", "profiler-core"]
+#   4. For each artifact_group, looks up which source_sets it needs
+#   5. Collects all unique submodules from those source_sets
+#   6. Downloads only those submodules: llvm-project, HIPIFY, spirv-llvm-translator
 # Result: Downloads 3 submodules instead of 20+
 ```
 
