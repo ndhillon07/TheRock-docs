@@ -383,86 +383,248 @@ Each build job runs these scripts (which DO read BUILD_TOPOLOGY.toml):
 
 ### Are Generic Builds Repeated in Each Matrix Job?
 
-**NO! They're built ONCE and downloaded from S3 by all jobs.**
+**IT DEPENDS ON WHICH WORKFLOW!** There are TWO different workflows:
 
-**Proof with actual workflow structure:**
+#### Workflow Type 1: Monolithic Builds (ci_nightly.yml → ci_linux.yml)
+
+**Answer: YES, generic builds are REPEATED for each GPU family**
+
+This is the workflow used for nightly CI and quick testing. Each GPU family gets a completely independent build.
+
+**Actual flow from ci_nightly.yml:**
 
 ```yaml
-# foundation job (1 machine, runs once)
-foundation:
-  amdgpu_family: ""  # Empty = generic build
-  # Builds: sysdeps, base for ALL GPUs
-  # Uploads: therock-base-linux.tar.xz (no GPU suffix!)
+# ci_nightly.yml creates a matrix of GPU families
+jobs:
+  linux_build_and_test:
+    strategy:
+      matrix:
+        variant: [
+          {family: "gfx94X-dcgpu"},
+          {family: "gfx1100"},
+          {family: "gfx950-dcgpu"}
+        ]
+    # For EACH GPU family, calls ci_linux.yml:
+    uses: ./.github/workflows/ci_linux.yml
+    with:
+      amdgpu_families: ${{ matrix.variant.family }}
+```
 
-# compiler-runtime job (1 machine, runs once)
-compiler-runtime:
-  needs: foundation
-  amdgpu_family: ""  # Empty = generic build
-  # Downloads: therock-base-linux.tar.xz from S3
-  # Builds: compiler, HIP runtime for ALL GPUs
-  # Uploads: therock-compiler-linux.tar.xz (no GPU suffix!)
+**What ci_linux.yml does:**
 
-# math-libs jobs (3 machines, run in parallel!)
-math-libs:
-  needs: compiler-runtime
-  strategy:
-    matrix:
-      family: ["gfx94X-dcgpu", "gfx1100", "gfx950-dcgpu"]
-  # EACH job:
-  #   Downloads: therock-compiler-linux.tar.xz ← SAME FILE!
-  #   Builds: rocBLAS for ONLY its GPU family
-  #   Uploads: therock-blas-linux-{GPU}.tar.xz (with GPU suffix!)
+```yaml
+# ci_linux.yml calls build_portable_linux_artifacts.yml
+jobs:
+  build_portable_linux_artifacts:
+    uses: ./.github/workflows/build_portable_linux_artifacts.yml
+    with:
+      amdgpu_families: ${{ inputs.amdgpu_families }}  # ONE GPU family
+```
+
+**What build_portable_linux_artifacts.yml does:**
+
+```yaml
+# This workflow builds EVERYTHING in one monolithic job
+steps:
+  - name: Fetch sources
+    run: ./build_tools/fetch_sources.py --jobs 12
+    # ↑ Downloads ALL source code (no --stage flag = everything)
+
+  - name: Configure Projects
+    run: python3 build_tools/github_actions/build_configure.py
+
+  - name: Build therock-archives and therock-dist
+    run: cmake --build build --target therock-archives therock-dist
+    # ↑ Builds EVERYTHING: foundation, compiler, math-libs, ALL in one go
+```
+
+**Timeline showing REPEATED builds:**
+
+```
+T+0:00  THREE jobs start SIMULTANEOUSLY (3 separate machines):
+
+        Machine A (gfx94X build):
+          ├─ Builds: compiler (generic)           ← Build #1
+          ├─ Builds: base (generic)               ← Build #1
+          ├─ Builds: rocBLAS for gfx94X only
+          └─ Uploads: therock-archives-gfx94X.tar.xz
+
+        Machine B (gfx1100 build):
+          ├─ Builds: compiler (generic)           ← Build #2 (DUPLICATE!)
+          ├─ Builds: base (generic)               ← Build #2 (DUPLICATE!)
+          ├─ Builds: rocBLAS for gfx1100 only
+          └─ Uploads: therock-archives-gfx1100.tar.xz
+
+        Machine C (gfx950 build):
+          ├─ Builds: compiler (generic)           ← Build #3 (DUPLICATE!)
+          ├─ Builds: base (generic)               ← Build #3 (DUPLICATE!)
+          ├─ Builds: rocBLAS for gfx950 only
+          └─ Uploads: therock-archives-gfx950.tar.xz
+
+Result: Compiler built 3 TIMES (once per GPU family job)
+        rocBLAS built 3 TIMES (once per GPU family)
+        Total waste: 4 hours × 3 = 12 hours of duplicated compiler builds!
+```
+
+**Why does ci_nightly use this wasteful approach?**
+
+- **Simplicity:** Each job is completely independent, easier to debug
+- **Isolation:** One GPU's build failure doesn't affect others
+- **Testing:** Catches integration bugs that might only appear with specific GPU targets
+- **Speed for small changes:** If you only need one GPU, you get everything in one job
+
+#### Workflow Type 2: Sharded Builds (multi_arch_build_portable_linux.yml)
+
+**Answer: NO, generic builds are built ONCE and shared via S3**
+
+This is the optimized workflow used for release builds and official artifacts.
+
+**Actual flow from multi_arch_build_portable_linux.yml:**
+
+```yaml
+jobs:
+  # Stage 1: foundation (generic) - runs on 1 machine
+  foundation:
+    uses: ./.github/workflows/multi_arch_build_portable_linux_artifacts.yml
+    with:
+      stage_name: foundation
+      amdgpu_family: ""  # Empty = generic build for ALL GPUs
+
+  # Stage 2: compiler-runtime (generic) - runs on 1 machine
+  compiler-runtime:
+    needs: foundation
+    uses: ./.github/workflows/multi_arch_build_portable_linux_artifacts.yml
+    with:
+      stage_name: compiler-runtime
+      amdgpu_family: ""  # Empty = generic build for ALL GPUs
+
+  # Stage 3: math-libs (per-arch) - runs on 3 machines IN PARALLEL
+  math-libs:
+    needs: compiler-runtime
+    strategy:
+      matrix:
+        family_info: [
+          {amdgpu_family: "gfx94X-dcgpu"},
+          {amdgpu_family: "gfx1100"},
+          {amdgpu_family: "gfx950-dcgpu"}
+        ]
+    uses: ./.github/workflows/multi_arch_build_portable_linux_artifacts.yml
+    with:
+      stage_name: math-libs
+      amdgpu_family: ${{ matrix.family_info.amdgpu_family }}
+```
+
+**What multi_arch_build_portable_linux_artifacts.yml does:**
+
+```yaml
+steps:
+  # CRITICAL: This fetches dependencies from S3!
+  - name: Fetch inbound artifacts
+    run: |
+      python build_tools/artifact_manager.py fetch \
+        --run-id=${{ github.run_id }} \
+        --stage="${STAGE_NAME}" \
+        --amdgpu-families="${{ inputs.amdgpu_family }}" \
+        --output-dir="${BUILD_DIR}" \
+        --bootstrap
+    # ↑ Downloads previously built stages from S3
+    # For math-libs stage, this downloads compiler-runtime artifacts!
+
+  - name: Fetch sources
+    run: ./build_tools/fetch_sources.py --stage ${STAGE_NAME}
+    # ↑ Only downloads sources for THIS stage (not everything)
+
+  - name: Build stage
+    run: cmake --build build --target stage-${STAGE_NAME}
+    # ↑ Only builds THIS stage (not everything)
+
+  - name: Push stage artifacts
+    run: |
+      python build_tools/artifact_manager.py push \
+        --run-id ${{ github.run_id }} \
+        --stage="${STAGE_NAME}" \
+        --build-dir="${BUILD_DIR}"
+    # ↑ Uploads this stage's artifacts to S3 for next stages to use
 ```
 
 **Timeline showing artifact reuse:**
 
 ```
 T+0:00  foundation (Machine A)
-        └─ Uploads: therock-compiler-linux.tar.xz → S3
+        ├─ Builds: base, sysdeps (generic for ALL GPUs)
+        └─ Uploads to S3: therock-base-linux.tar.xz
 
 T+2:00  compiler-runtime (Machine B)
-        ├─ Downloads: therock-base-linux.tar.xz ← FROM S3
-        └─ Uploads: therock-compiler-linux.tar.xz → S3
+        ├─ Downloads from S3: therock-base-linux.tar.xz ← FROM PREVIOUS STAGE
+        ├─ Builds: compiler, HIP runtime (generic for ALL GPUs)
+        └─ Uploads to S3: therock-compiler-linux.tar.xz
 
-T+4:00  THREE jobs start SIMULTANEOUSLY:
+T+4:00  THREE math-libs jobs start SIMULTANEOUSLY:
 
         Machine C (gfx94X):
-          ├─ Downloads: therock-compiler-linux.tar.xz ← SAME FILE
-          └─ Builds: rocBLAS for gfx94X only
+          ├─ Downloads from S3: therock-compiler-linux.tar.xz ← SAME FILE
+          ├─ Builds: rocBLAS for gfx94X ONLY
+          └─ Uploads to S3: therock-blas-linux-gfx94X.tar.xz
 
         Machine D (gfx1100):
-          ├─ Downloads: therock-compiler-linux.tar.xz ← SAME FILE
-          └─ Builds: rocBLAS for gfx1100 only
+          ├─ Downloads from S3: therock-compiler-linux.tar.xz ← SAME FILE
+          ├─ Builds: rocBLAS for gfx1100 ONLY
+          └─ Uploads to S3: therock-blas-linux-gfx1100.tar.xz
 
         Machine E (gfx950):
-          ├─ Downloads: therock-compiler-linux.tar.xz ← SAME FILE
-          └─ Builds: rocBLAS for gfx950 only
+          ├─ Downloads from S3: therock-compiler-linux.tar.xz ← SAME FILE
+          ├─ Builds: rocBLAS for gfx950 ONLY
+          └─ Uploads to S3: therock-blas-linux-gfx950.tar.xz
 
-Result: Compiler built ONCE, downloaded 3 times
+Result: Compiler built ONCE (on Machine B)
+        Downloaded 3 TIMES (Machines C, D, E reuse it)
         rocBLAS built 3 TIMES (once per GPU)
 ```
 
-**S3 bucket proof:**
+**S3 bucket structure:**
 
 ```
-s3://therock-ci-artifacts/12345-linux/
+s3://therock-ci-artifacts/{github.run_id}-linux/
 
-Generic (no GPU suffix = built once):
-  therock-compiler-linux.tar.xz               ← 1 file, used by all
+Generic (built once, no GPU suffix):
+  foundation/
+    therock-base-linux.tar.xz          ← Built by foundation stage
+  compiler-runtime/
+    therock-compiler-linux.tar.xz      ← Built by compiler-runtime stage
+    therock-hip-runtime-linux.tar.xz
 
-Per-arch (GPU suffix = built per family):
-  therock-blas-linux-gfx94X-dcgpu.tar.xz      ← 3 separate files
-  therock-blas-linux-gfx1100.tar.xz
-  therock-blas-linux-gfx950-dcgpu.tar.xz
+Per-arch (built per GPU, with GPU suffix):
+  math-libs/
+    therock-blas-linux-gfx94X-dcgpu.tar.xz    ← Built by math-libs[gfx94X] job
+    therock-blas-linux-gfx1100.tar.xz         ← Built by math-libs[gfx1100] job
+    therock-blas-linux-gfx950-dcgpu.tar.xz    ← Built by math-libs[gfx950] job
 ```
 
-**Efficiency:**
+**Efficiency comparison:**
 
 ```
-If compiler was built 3 times: 2 hours × 3 = 6 hours
-Actual (built once, shared):    2 hours × 1 = 2 hours
-Savings:                        4 hours!
+Workflow Type 1 (Monolithic):
+  Compiler builds: 2 hours × 3 GPUs = 6 hours total compute time
+  rocBLAS builds:  1 hour  × 3 GPUs = 3 hours total compute time
+  Total compute:                      9 hours
+  Wall-clock time: 3 hours (parallel, but each job takes full 3 hours)
+
+Workflow Type 2 (Sharded):
+  Compiler builds: 2 hours × 1 = 2 hours total compute time
+  rocBLAS builds:  1 hour  × 3 = 3 hours total compute time (parallel)
+  Total compute:                 5 hours
+  Wall-clock time: 4 hours (sequential: foundation→compiler→math-libs)
+
+Savings: 4 hours of compute time
+Trade-off: +1 hour wall-clock (sequential stages vs full parallel)
 ```
+
+**Which workflow is used when?**
+
+| Workflow | Trigger | When Used | Trade-off |
+|----------|---------|-----------|-----------|
+| Monolithic (ci_nightly) | Nightly, PR testing | Quick iteration, testing | Wastes compute, faster for single GPU |
+| Sharded (multi_arch) | Release builds, official packages | Production artifacts | Saves compute, slower wall-clock |
 
 ### The 4-Level Hierarchy
 
