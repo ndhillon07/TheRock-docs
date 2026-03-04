@@ -239,50 +239,172 @@ Let's understand each level with concrete examples.
 
 ### Level 1: Source Sets
 
-**What they are:** Groupings of git submodules
+#### What is a Git Submodule? (Starting from Basics)
 
-**Why they exist:** TheRock has 20+ git submodules. CI jobs don't need all of them. Source sets let CI clone only what's needed.
+Think of TheRock like a cookbook that references other cookbooks. The main cookbook doesn't contain all recipes - it just says "for desserts, see the Dessert Cookbook at this location."
 
-**Example:**
+In git terms:
+- **TheRock repository** = main cookbook
+- **Git submodules** = references to other cookbooks (other git repositories)
+- **`.gitmodules` file** = table of contents listing all referenced cookbooks
+
+**Real example from TheRock:**
+
+The file `.gitmodules` in the root of TheRock contains:
+
+```ini
+[submodule "rocm-libraries"]
+	path = rocm-libraries
+	url = https://github.com/ROCm/rocm-libraries
+	branch = develop
+
+[submodule "llvm-project"]
+	path = compiler/amd-llvm
+	url = https://github.com/ROCm/llvm-project.git
+	branch = amd-mainline
+
+[submodule "HIPIFY"]
+	path = compiler/hipify
+	url = https://github.com/ROCm/HIPIFY.git
+	branch = amd-mainline
+```
+
+**What this means:**
+
+- **Submodule name:** `rocm-libraries` (this is how we refer to it)
+- **Path:** Where it gets cloned inside TheRock → `rocm-libraries/` directory
+- **URL:** Where to download it from → GitHub repository
+- **Branch:** Which version to use → `develop` branch
+
+**Analogy:**
+
+```
+Your main project (TheRock):
+└── Like a main building with references to other buildings
+
+Git submodules (.gitmodules):
+└── Like sticky notes saying:
+    - "Math library code is at 123 GitHub Street, use version 2.0"
+    - "Compiler code is at 456 GitHub Avenue, use version 3.1"
+```
+
+#### What Are Source Sets?
+
+**Problem:** TheRock has 20+ submodules. Downloading all of them takes time and disk space. If you only want to build the compiler, why download math libraries?
+
+**Solution:** Source sets group related submodules.
+
+**Real example from BUILD_TOPOLOGY.toml:**
 
 ```toml
 [source_sets.compilers]
 description = "Compiler toolchain submodules"
 submodules = ["llvm-project", "HIPIFY", "spirv-llvm-translator"]
 
+[source_sets.rocm-libraries]
+description = "ROCm libraries monorepo (math libs)"
+submodules = ["rocm-libraries"]
+
 [source_sets.math-libs]
 description = "Additional math library submodules"
 submodules = ["libhipcxx"]
-
-[source_sets.rocm-libraries]
-description = "ROCm libraries monorepo (math libs)"
-submodules = ["rocm-libraries"]  # This contains rocBLAS, rocFFT, etc.
 ```
 
-**What happens:**
+**The connection:**
+
+Notice that the names in `submodules = [...]` match the `[submodule "name"]` entries in `.gitmodules`:
+
+```
+BUILD_TOPOLOGY.toml says:     .gitmodules says:
+submodules = ["llvm-project"]  →  [submodule "llvm-project"]
+                                    path = compiler/amd-llvm
+                                    url = https://github.com/ROCm/llvm-project.git
+```
+
+**What happens when you use source sets:**
 
 ```bash
-# Full checkout (gets all submodules)
+# Scenario 1: Download everything (all 20+ submodules)
 ./build_tools/fetch_sources.py
 
-# Partial checkout (only compiler sources)
+# This runs:
+git submodule update --init --recursive
+# Result: Downloads all submodules listed in .gitmodules
+
+# Scenario 2: Download only compiler sources
 ./build_tools/fetch_sources.py --stage compiler-runtime
+
+# This:
+#   1. Reads BUILD_TOPOLOGY.toml
+#   2. Finds build_stages.compiler-runtime
+#   3. Looks up which source_sets it needs
+#   4. Downloads only those submodules (llvm-project, HIPIFY, spirv-llvm-translator)
+# Result: Downloads 3 submodules instead of 20+
 ```
 
-**Fundamental concept:** Source sets are about **git repositories**, not build logic. They're just a convenience for partial checkouts.
+**Concrete example:**
+
+```
+Full download (no source sets):
+  rocm-libraries/      ← 2.5 GB
+  compiler/amd-llvm/   ← 1.8 GB
+  compiler/hipify/     ← 50 MB
+  rocgdb/              ← 300 MB
+  ... (17 more)
+  Total: ~8 GB
+
+Partial download (compiler source set only):
+  compiler/amd-llvm/   ← 1.8 GB
+  compiler/hipify/     ← 50 MB
+  compiler/spirv-llvm-translator/ ← 100 MB
+  Total: ~2 GB (saved 6 GB and download time!)
+```
+
+**Fundamental concepts:**
+
+1. **Source sets are labels for groups of submodules** - like folders organizing files
+2. **Submodule names come from .gitmodules** - this is native git, not TheRock-specific
+3. **Source sets enable partial checkouts** - download only what you need
+4. **This is purely about git operations** - has nothing to do with how code is compiled
 
 ### Level 2: Build Stages
 
-**What they are:** Groups of components that build together in a single CI job
+#### The Problem: Building Everything Takes Too Long
 
-**Why they exist:** ROCm takes 4-8 hours to build everything. Build stages let CI parallelize by running multiple independent jobs.
+**Scenario:** You have a factory making cars. Making one complete car takes 8 hours. If you make them one at a time, 10 cars = 80 hours.
 
-**Example:**
+**Solution:** Parallelize! Have different teams work on different parts simultaneously:
+- Team A: Makes engines (2 hours)
+- Team B: Makes chassis (3 hours) - can start while Team A works
+- Team C: Makes interiors (2 hours) - can start after chassis is done
+
+Total time: Not 80 hours, maybe 15 hours with good parallelization!
+
+**Same problem in software:** Building all of ROCm takes 4-8 hours. Building everything sequentially would take forever in CI. Build stages let us run multiple builds in parallel.
+
+#### What is CI? (Quick Background)
+
+**CI = Continuous Integration** - automated building and testing
+
+When developers push code to GitHub, CI automatically:
+1. Checks out the code
+2. Builds it
+3. Runs tests
+4. Reports results
+
+**CI Job** = One build task running on one machine (like one factory team)
+
+**Build Stage in TheRock** = A group of components that build together in one CI job
+
+#### Build Stages Example
+
+**Real example from BUILD_TOPOLOGY.toml:**
 
 ```toml
 [build_stages.foundation]
 description = "Foundation - critical path dependencies"
 artifact_groups = ["third-party-sysdeps", "base"]
+# No dependencies - this runs first
 
 [build_stages.compiler-runtime]
 description = "Compiler, runtimes, and core profiling"
@@ -292,11 +414,12 @@ artifact_groups = [
     "hip-runtime",
     "profiler-core"
 ]
+# Depends on foundation
 
 [build_stages.math-libs]
 description = "Math and ML libraries per architecture"
 artifact_groups = ["math-libs", "ml-libs"]
-type = "per-arch"  # This means: run once per GPU family
+type = "per-arch"  # Special: run once per GPU family
 
 [build_stages.comm-libs]
 description = "Communication libraries per architecture"
@@ -304,33 +427,188 @@ artifact_groups = ["comm-libs"]
 type = "per-arch"
 ```
 
-**What happens in CI:**
+#### What "type = per-arch" Means
+
+**Background:** ROCm supports different GPU families:
+- `gfx94X-dcgpu` = MI300 data center GPUs
+- `gfx1100` = Radeon RX 7000 consumer GPUs
+- `gfx950-dcgpu` = MI340 data center GPUs
+
+**Problem:** Math libraries have GPU-specific kernel code. The rocBLAS library compiled for MI300 won't work on RX 7000.
+
+**Solution:** Build separately for each GPU family.
+
+**type values:**
+
+- **`type = "generic"`** (or no type specified) = Build once, works for all GPUs
+  - Example: Compiler (all GPUs use the same compiler)
+
+- **`type = "per-arch"`** = Build separately for each GPU family
+  - Example: rocBLAS (has GPU-specific optimized kernels)
+
+**What happens in CI with per-arch:**
 
 ```
-┌───────────────┐
-│ foundation    │  (Job 1: builds third-party deps and base)
-└───────┬───────┘
+User configures nightly build for 3 GPU families: gfx94X, gfx1100, gfx950
+
+BUILD_TOPOLOGY.toml says:
+  [build_stages.math-libs]
+  type = "per-arch"
+
+CI automatically creates 3 parallel jobs:
+  Job 1: Build math-libs for gfx94X
+  Job 2: Build math-libs for gfx1100  (runs simultaneously!)
+  Job 3: Build math-libs for gfx950   (runs simultaneously!)
+
+Instead of 12 hours sequential, takes 4 hours parallel!
+```
+
+#### How CI Uses Build Stages
+
+**Real workflow from GitHub Actions:**
+
+```yaml
+# .github/workflows/ci_linux.yml
+
+jobs:
+  configure:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate build matrix from topology
+        run: |
+          python build_tools/github_actions/configure_ci.py \
+            --topology BUILD_TOPOLOGY.toml \
+            --gpu-families "gfx94X-dcgpu,gfx1100"
+    outputs:
+      matrix: ${{ steps.generate.outputs.matrix }}
+
+  # This creates jobs dynamically:
+  # [
+  #   {stage: "foundation", gpu: "generic"},
+  #   {stage: "compiler-runtime", gpu: "generic"},
+  #   {stage: "math-libs", gpu: "gfx94X-dcgpu"},
+  #   {stage: "math-libs", gpu: "gfx1100"},
+  #   {stage: "comm-libs", gpu: "gfx94X-dcgpu"},
+  #   {stage: "comm-libs", gpu: "gfx1100"},
+  # ]
+
+  build:
+    needs: configure
+    strategy:
+      matrix: ${{ fromJson(needs.configure.outputs.matrix) }}
+    runs-on: azure-scale-set
+    steps:
+      - name: Build stage ${{ matrix.stage }} for ${{ matrix.gpu }}
+        run: |
+          cmake -B build -DTHEROCK_AMDGPU_FAMILIES=${{ matrix.gpu }}
+          ninja -C build
+```
+
+**Visual flow:**
+
+```
+Time 0:00
+┌────────────────┐
+│ foundation     │  Job 1: Builds zlib, cmake, etc.
+│ (generic)      │  Duration: 30 min
+└───────┬────────┘
+        │ Wait for foundation to upload artifacts...
         │
+Time 0:30
         ↓
 ┌────────────────────┐
-│ compiler-runtime   │  (Job 2: builds compiler and HIP runtime)
-└───────┬────────────┘
+│ compiler-runtime   │  Job 2: Downloads foundation artifacts
+│ (generic)          │  Builds compiler, HIP runtime
+└───────┬────────────┘  Duration: 2 hours
+        │ Wait for compiler-runtime to upload artifacts...
         │
-        ├─────────────┬─────────────┐
-        ↓             ↓             ↓
-┌──────────────┐ ┌──────────────┐ ┌──────────────┐
-│ math-libs    │ │ math-libs    │ │ comm-libs    │
-│ (gfx94X)     │ │ (gfx1100)    │ │ (gfx94X)     │
-└──────────────┘ └──────────────┘ └──────────────┘
-  Job 3           Job 4            Job 5
-  (parallel)      (parallel)       (parallel)
+Time 2:30
+        ↓
+        ├──────────────┬──────────────┬──────────────┬──────────────┐
+        ↓              ↓              ↓              ↓              ↓
+┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+│ math-libs    │ │ math-libs    │ │ math-libs    │ │ comm-libs    │ │ comm-libs    │
+│ gfx94X       │ │ gfx1100      │ │ gfx950       │ │ gfx94X       │ │ gfx1100      │
+└──────────────┘ └──────────────┘ └──────────────┘ └──────────────┘ └──────────────┘
+  Job 3           Job 4            Job 5            Job 6            Job 7
+  (all run in parallel - all download compiler-runtime artifacts)
+  Duration: 3 hours each
+
+Time 5:30 - All done!
+
+Total time: 5.5 hours
+Without parallelization: 0.5 + 2 + (3×5) = 17.5 hours
+Speedup: 3.2x
 ```
 
-**Fundamental concepts:**
+#### Concrete Example: What Runs Where
 
-1. **Build stage ≠ sequential step** - Many stages run in parallel
-2. **type = "per-arch"** means CI creates one job per GPU family
-3. **Stages define CI job boundaries**, not build system behavior
+**build_stages.math-libs builds these components:**
+
+```bash
+# One CI job for gfx94X:
+cmake -B build -DTHEROCK_AMDGPU_FAMILIES=gfx94X-dcgpu
+ninja -C build
+
+# This compiles (inside one job):
+- rocBLAS  (optimized for MI300 GPUs)
+- rocFFT   (optimized for MI300 GPUs)
+- rocRAND  (optimized for MI300 GPUs)
+- MIOpen   (ML library for MI300 GPUs)
+
+# Produces:
+- therock-blas-linux-gfx94X-dcgpu.tar.xz
+- therock-fft-linux-gfx94X-dcgpu.tar.xz
+- therock-rand-linux-gfx94X-dcgpu.tar.xz
+- therock-miopen-linux-gfx94X-dcgpu.tar.xz
+```
+
+**Simultaneously, another CI job for gfx1100:**
+
+```bash
+# Different machine, same stage, different GPU
+cmake -B build -DTHEROCK_AMDGPU_FAMILIES=gfx1100
+ninja -C build
+
+# Compiles:
+- rocBLAS  (optimized for RX 7000 GPUs)
+- rocFFT   (optimized for RX 7000 GPUs)
+- rocRAND  (optimized for RX 7000 GPUs)
+- MIOpen   (ML library for RX 7000 GPUs)
+
+# Produces:
+- therock-blas-linux-gfx1100.tar.xz
+- therock-fft-linux-gfx1100.tar.xz
+- therock-rand-linux-gfx1100.tar.xz
+- therock-miopen-linux-gfx1100.tar.xz
+```
+
+**The magic:** Both jobs run at the same time on different machines!
+
+#### Fundamental Concepts
+
+1. **Build stage = CI job boundary** - defines what builds together
+2. **Stages enable parallelization** - multiple stages run simultaneously if independent
+3. **type = "per-arch" multiplies jobs** - one job per GPU family
+4. **Build stages don't affect local builds** - only relevant for CI
+5. **Dependencies between stages are computed automatically** - from artifact_groups dependencies
+
+**Analogy:**
+
+```
+Build stages = Assembly line stations
+
+Station 1 (foundation):
+  Makes basic parts everyone needs (wheels, bolts)
+
+Station 2 (compiler-runtime):
+  Makes engines (needs Station 1's parts)
+
+Station 3a, 3b, 3c (math-libs × 3 GPUs):
+  Make 3 different car models simultaneously
+  All need Station 2's engines
+  All can work in parallel!
+```
 
 ### Level 3: Artifact Groups
 
