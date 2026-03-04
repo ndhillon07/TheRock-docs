@@ -2082,10 +2082,10 @@ ninja -C build
 
 **The key insight:**
 
-- **Source sets** → About **git repositories**
-- **Build stages** → About **CI/CD parallelization**
-- **Artifact groups** → About **dependency relationships**
-- **Artifacts** → About **packaging outputs** (.tar.xz files)
+- **Source sets** → About git repositories
+- **Build stages** → About CI/CD parallelization
+- **Artifact groups** → About dependency relationships
+- **Artifacts** → About packaging outputs (.tar.xz files)
 
 These are different dimensions of organization, not a strict hierarchy. The same artifact (like `blas`) participates in all four levels for different reasons.
 
