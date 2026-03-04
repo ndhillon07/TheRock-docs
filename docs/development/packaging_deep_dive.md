@@ -2357,25 +2357,29 @@ ninja -C build artifacts
 
 # This produces TWO things:
 #
-# A) Raw component directories (NOT uploaded to S3):
+# A) Raw component directories:
 # build/artifacts/
-# ├── blas_lib_gfx94X/         ← Runtime library component only
-# ├── blas_dev_gfx94X/         ← Development files component only
-# ├── blas_test_gfx94X/        ← Test binaries component only
-# ├── blas_dbg_gfx94X/         ← Debug symbols component only
-# ├── blas_doc_gfx94X/         ← Documentation component only
+# ├── blas_lib_gfx94X-dcgpu/         ← Runtime library component only
+# ├── blas_dev_gfx94X-dcgpu/         ← Development files component only
+# ├── blas_test_gfx94X-dcgpu/        ← Test binaries component only
+# ├── blas_dbg_gfx94X-dcgpu/         ← Debug symbols component only
+# ├── blas_doc_gfx94X-dcgpu/         ← Documentation component only
 # └── ... (same for fft, rand, solver, etc.)
 #
-# B) Bundled .tar.xz archives (THESE get uploaded to S3):
+# B) Archived .tar.xz files (one .tar.xz per component):
 # build/artifacts/
-# ├── therock-base-linux-gfx94X-dcgpu.tar.xz    ← All base components bundled
-# ├── therock-compiler-linux-gfx94X-dcgpu.tar.xz
-# ├── therock-core-linux-gfx94X-dcgpu.tar.xz
-# ├── therock-blas-linux-gfx94X-dcgpu.tar.xz    ← All blas components (lib+dev+test+dbg+doc) bundled
-# ├── therock-fft-linux-gfx94X-dcgpu.tar.xz     ← All fft components bundled
-# └── ... (one .tar.xz per artifact)
+# ├── blas_lib_gfx94X-dcgpu.tar.xz    ← Just lib component
+# ├── blas_dev_gfx94X-dcgpu.tar.xz    ← Just dev component
+# ├── blas_test_gfx94X-dcgpu.tar.xz   ← Just test component
+# ├── blas_dbg_gfx94X-dcgpu.tar.xz    ← Just dbg component
+# ├── blas_doc_gfx94X-dcgpu.tar.xz    ← Just doc component
+# ├── fft_lib_gfx94X-dcgpu.tar.xz     ← FFT lib component
+# ├── fft_dev_gfx94X-dcgpu.tar.xz     ← FFT dev component
+# └── ... (one .tar.xz per component of each artifact)
+#
+# Naming pattern: {artifact}_{component}_{target}.tar.xz
 
-# 5. Upload to S3 (ONLY .tar.xz files, NOT raw directories)
+# 5. Upload to S3 (ALL .tar.xz files)
 python ./build_tools/github_actions/post_build_upload.py \
   --artifact-dir build/artifacts/ \
   --s3-bucket therock-ci-artifacts \
@@ -2387,23 +2391,31 @@ python ./build_tools/github_actions/post_build_upload.py \
 ```
 s3://therock-ci-artifacts/21440027240-linux/
 ├── index-gfx94X-dcgpu.html
-├── therock-base-linux-gfx94X-dcgpu.tar.xz
-├── therock-compiler-linux-gfx94X-dcgpu.tar.xz
-├── therock-core-linux-gfx94X-dcgpu.tar.xz
-├── therock-blas-linux-gfx94X-dcgpu.tar.xz
-├── therock-fft-linux-gfx94X-dcgpu.tar.xz
-├── therock-rand-linux-gfx94X-dcgpu.tar.xz
-├── therock-solver-linux-gfx94X-dcgpu.tar.xz
-├── therock-miopen-linux-gfx94X-dcgpu.tar.xz
-└── ... (one .tar.xz per artifact)
+├── amd-llvm_dbg_generic.tar.xz
+├── amd-llvm_dev_generic.tar.xz
+├── amd-llvm_doc_generic.tar.xz
+├── amd-llvm_lib_generic.tar.xz
+├── amd-llvm_run_generic.tar.xz
+├── blas_dbg_gfx94X-dcgpu.tar.xz
+├── blas_dev_gfx94X-dcgpu.tar.xz
+├── blas_doc_gfx94X-dcgpu.tar.xz
+├── blas_lib_gfx94X-dcgpu.tar.xz
+├── blas_test_gfx94X-dcgpu.tar.xz
+├── fft_dbg_gfx94X-dcgpu.tar.xz
+├── fft_dev_gfx94X-dcgpu.tar.xz
+├── fft_lib_gfx94X-dcgpu.tar.xz
+├── fft_test_gfx94X-dcgpu.tar.xz
+└── ... (one .tar.xz per component of each artifact)
 ```
+
+**Naming pattern:** `{artifact}_{component}_{target}.tar.xz`
 
 **Important Notes:**
 
-1. **Only `.tar.xz` files are uploaded to S3**, not the raw component directories
-2. **Each `.tar.xz` contains ALL components bundled together** (lib + dev + test + dbg + doc)
-3. The raw component directories (`blas_lib_gfx94X/`, `blas_dev_gfx94X/`, etc.) remain in the build machine's `build/artifacts/` directory but are NOT uploaded
-4. Later packaging stages (Python/DEB/RPM) download these bundled `.tar.xz` files and split them back into separate packages
+1. **Artifacts are split by component** - each component (lib, dev, test, dbg, doc) gets its own `.tar.xz` file
+2. **Generic artifacts** (target-neutral) use `_generic` suffix (like amd-llvm)
+3. **GPU-specific artifacts** use target family suffix (like `_gfx94X-dcgpu`)
+4. Later packaging stages download the specific components they need (e.g., Python wheels only need `_lib_` components)
 
 The `index-gfx94X-dcgpu.html` is a simple web page listing all files, making it easy to download them.
 
