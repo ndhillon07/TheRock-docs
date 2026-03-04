@@ -1311,10 +1311,22 @@ cd /home/runner/work/TheRock/TheRock  # ← Monorepo root directory
 # STEP 2: HOW - CMake flags determine what gets built
 cmake -B build \
   -DTHEROCK_AMDGPU_FAMILIES=gfx94X-dcgpu \
-  -DTHEROCK_ENABLE_MATH_LIBS=ON \        # ← This enables math-libs components
+  \
+  # Foundation & compiler components (ENABLED BY DEFAULT - no need to specify):
+  # -DTHEROCK_ENABLE_BASE=ON              # ← Already ON by default
+  # -DTHEROCK_ENABLE_THIRD_PARTY_SYSDEPS=ON  # ← Already ON by default
+  # -DTHEROCK_ENABLE_COMPILER=ON          # ← Already ON by default
+  # -DTHEROCK_ENABLE_DEVICE_LIBS=ON       # ← Already ON by default
+  # -DTHEROCK_ENABLE_CORE_RUNTIME=ON      # ← Already ON by default
+  # -DTHEROCK_ENABLE_HIP_RUNTIME=ON       # ← Already ON by default
+  \
+  # Math/ML library components (DISABLED BY DEFAULT - must enable explicitly):
+  -DTHEROCK_ENABLE_MATH_LIBS=ON \        # ← Enables math-libs group
   -DTHEROCK_ENABLE_BLAS=ON \             # ← Specifically enable rocBLAS
   -DTHEROCK_ENABLE_FFT=ON \              # ← Specifically enable rocFFT
   -DTHEROCK_ENABLE_RAND=ON \             # ← Specifically enable rocRAND
+  -DTHEROCK_ENABLE_SOLVER=ON \           # ← Specifically enable rocSOLVER
+  -DTHEROCK_ENABLE_ML_LIBS=ON \          # ← Enables ml-libs group
   -DTHEROCK_ENABLE_MIOPEN=ON             # ← Specifically enable MIOpen
 
 # What happens during CMake configure (in plain English):
@@ -1325,14 +1337,20 @@ cmake -B build \
 #   2. Sees that "blas" artifact is in the "math-libs" group
 #   3. Sees THEROCK_ENABLE_BLAS=ON flag (user wants rocBLAS)
 #   4. Tells the build system: "Include rocBLAS source code in the build"
-#   5. Repeats for FFT, RAND, MIOpen (all enabled with =ON flags)
+#   5. Repeats for FFT, RAND, SOLVER, MIOpen (all enabled with =ON flags)
+#
+# IMPORTANT: Foundation and compiler components are ENABLED BY DEFAULT.
+# You only need to explicitly enable optional components (math-libs, ml-libs, etc.)
 #
 # Think of it like checking boxes on a form:
-#   ☑ Build rocBLAS
-#   ☑ Build rocFFT
-#   ☑ Build rocRAND
-#   ☑ Build MIOpen
-#   ☐ Build rocSOLVER (not enabled, so skip this)
+#   ☑ Build compiler (default - always checked)
+#   ☑ Build HIP runtime (default - always checked)
+#   ☑ Build rocBLAS (optional - YOU enabled this)
+#   ☑ Build rocFFT (optional - YOU enabled this)
+#   ☑ Build rocRAND (optional - YOU enabled this)
+#   ☑ Build rocSOLVER (optional - YOU enabled this)
+#   ☑ Build MIOpen (optional - YOU enabled this)
+#   ☐ Build rocSPARSE (optional - you didn't enable, so skip)
 
 # STEP 3: Build ALL enabled components in one command
 ninja -C build
@@ -1393,10 +1411,13 @@ cd /home/runner/work/TheRock/TheRock  # ← Still monorepo root
 
 cmake -B build \
   -DTHEROCK_AMDGPU_FAMILIES=gfx1100 \  # ← Only difference: GPU family
+  # (Same enable flags as gfx94X job above - foundation/compiler default ON)
   -DTHEROCK_ENABLE_MATH_LIBS=ON \
   -DTHEROCK_ENABLE_BLAS=ON \
   -DTHEROCK_ENABLE_FFT=ON \
   -DTHEROCK_ENABLE_RAND=ON \
+  -DTHEROCK_ENABLE_SOLVER=ON \
+  -DTHEROCK_ENABLE_ML_LIBS=ON \
   -DTHEROCK_ENABLE_MIOPEN=ON
 
 ninja -C build
