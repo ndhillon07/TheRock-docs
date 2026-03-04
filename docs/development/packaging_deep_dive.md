@@ -80,14 +80,19 @@ Here's how CI builds and packages TheRock every night:
             ↓                            ↓
 ┌─────────────────────────────────────────────────────────────┐
 │ S3 STORAGE: therock-ci-artifacts/{run_id}/                  │
-│ ├── therock-base-linux-gfx94X.tar.xz                       │
-│ ├── therock-compiler-linux-gfx94X.tar.xz                   │
-│ ├── therock-core-linux-gfx94X.tar.xz                       │
-│ ├── therock-blas-linux-gfx94X-dcgpu.tar.xz                 │
-│ ├── therock-fft-linux-gfx94X-dcgpu.tar.xz                  │
-│ ├── therock-rand-linux-gfx94X-dcgpu.tar.xz                 │
-│ ├── therock-miopen-linux-gfx94X-dcgpu.tar.xz               │
-│ └── ... (one per artifact, for each GPU family)             │
+│ ├── base_lib_generic.tar.xz                                 │
+│ ├── base_dev_generic.tar.xz                                 │
+│ ├── compiler_lib_generic.tar.xz                             │
+│ ├── compiler_dev_generic.tar.xz                             │
+│ ├── core_lib_gfx94X-dcgpu.tar.xz                            │
+│ ├── core_dev_gfx94X-dcgpu.tar.xz                            │
+│ ├── blas_lib_gfx94X-dcgpu.tar.xz                            │
+│ ├── blas_dev_gfx94X-dcgpu.tar.xz                            │
+│ ├── blas_test_gfx94X-dcgpu.tar.xz                           │
+│ ├── fft_lib_gfx94X-dcgpu.tar.xz                             │
+│ ├── rand_lib_gfx94X-dcgpu.tar.xz                            │
+│ ├── miopen_lib_gfx94X-dcgpu.tar.xz                          │
+│ └── ... (one .tar.xz per component, for each GPU family)    │
 └────────────────────────┬────────────────────────────────────┘
                          │
                          │ Download artifacts
@@ -677,52 +682,58 @@ steps:
 ```
 T+0:00  foundation (Machine A)
         ├─ Builds: base, sysdeps (generic for ALL GPUs)
-        └─ Uploads to S3: therock-base-linux.tar.xz
+        └─ Uploads to S3: base_lib_generic.tar.xz, base_dev_generic.tar.xz, etc.
 
 T+2:00  compiler-runtime (Machine B)
-        ├─ Downloads from S3: therock-base-linux.tar.xz ← FROM PREVIOUS STAGE
+        ├─ Downloads from S3: base_lib_generic.tar.xz ← FROM PREVIOUS STAGE
         ├─ Builds: compiler, HIP runtime (generic for ALL GPUs)
-        └─ Uploads to S3: therock-compiler-linux.tar.xz
+        └─ Uploads to S3: compiler_lib_generic.tar.xz, compiler_dev_generic.tar.xz, etc.
 
 T+4:00  THREE math-libs jobs start SIMULTANEOUSLY (1 per GPU family):
 
         Machine C (gfx94X):
-          ├─ Downloads from S3: therock-compiler-linux.tar.xz ← SAME FILE
+          ├─ Downloads from S3: compiler_lib_generic.tar.xz ← SAME FILE
           ├─ Builds: rocBLAS for gfx94X ONLY
-          └─ Uploads to S3: therock-blas-linux-gfx94X.tar.xz
+          └─ Uploads to S3: blas_lib_gfx94X-dcgpu.tar.xz, blas_dev_gfx94X-dcgpu.tar.xz, etc.
 
         Machine D (gfx1100):
-          ├─ Downloads from S3: therock-compiler-linux.tar.xz ← SAME FILE
+          ├─ Downloads from S3: compiler_lib_generic.tar.xz ← SAME FILE
           ├─ Builds: rocBLAS for gfx1100 ONLY
-          └─ Uploads to S3: therock-blas-linux-gfx1100.tar.xz
+          └─ Uploads to S3: blas_lib_gfx1100.tar.xz, blas_dev_gfx1100.tar.xz, etc.
 
         Machine E (gfx950):
-          ├─ Downloads from S3: therock-compiler-linux.tar.xz ← SAME FILE
+          ├─ Downloads from S3: compiler_lib_generic.tar.xz ← SAME FILE
           ├─ Builds: rocBLAS for gfx950 ONLY
-          └─ Uploads to S3: therock-blas-linux-gfx950.tar.xz
+          └─ Uploads to S3: blas_lib_gfx950-dcgpu.tar.xz, blas_dev_gfx950-dcgpu.tar.xz, etc.
 
 Result: Compiler built ONCE (on Machine B)
         Downloaded 3 TIMES (Machines C, D, E reuse it)
         rocBLAS built 3 TIMES (once per GPU)
 ```
 
-**S3 bucket structure:**
+**S3 bucket structure (showing per-component archives):**
 
 ```
 s3://therock-ci-artifacts/{github.run_id}-linux/
 
-Generic (built once, no GPU suffix):
-  foundation/
-    therock-base-linux.tar.xz          ← Built by foundation stage
-  compiler-runtime/
-    therock-compiler-linux.tar.xz      ← Built by compiler-runtime stage
-    therock-hip-runtime-linux.tar.xz
+Generic (built once, no GPU suffix, split by component):
+  base_lib_generic.tar.xz              ← Built by foundation stage
+  base_dev_generic.tar.xz
+  compiler_lib_generic.tar.xz          ← Built by compiler-runtime stage
+  compiler_dev_generic.tar.xz
+  hip-runtime_lib_generic.tar.xz
+  hip-runtime_dev_generic.tar.xz
 
-Per-arch (built per GPU, with GPU suffix):
-  math-libs/
-    therock-blas-linux-gfx94X-dcgpu.tar.xz    ← Built by math-libs[gfx94X] job
-    therock-blas-linux-gfx1100.tar.xz         ← Built by math-libs[gfx1100] job
-    therock-blas-linux-gfx950-dcgpu.tar.xz    ← Built by math-libs[gfx950] job
+Per-arch (built per GPU, with GPU suffix, split by component):
+  blas_lib_gfx94X-dcgpu.tar.xz         ← Built by math-libs[gfx94X] job
+  blas_dev_gfx94X-dcgpu.tar.xz
+  blas_test_gfx94X-dcgpu.tar.xz
+  blas_lib_gfx1100.tar.xz              ← Built by math-libs[gfx1100] job
+  blas_dev_gfx1100.tar.xz
+  blas_test_gfx1100.tar.xz
+  blas_lib_gfx950-dcgpu.tar.xz         ← Built by math-libs[gfx950] job
+  blas_dev_gfx950-dcgpu.tar.xz
+  blas_test_gfx950-dcgpu.tar.xz
 ```
 
 **Efficiency comparison:**
@@ -829,18 +840,23 @@ LEVEL 4: Artifacts        (what are the actual .tar.xz files?)
 │   ├─ type: "target-specific" ← Built per GPU family                   │
 │   ├─ artifact_group: "math-libs"                                       │
 │   ├─ artifact_deps: ["hip-runtime", "compiler"] ← Needs these first!  │
-│   ├─ split_databases: ["rocblas"] ← Creates multiple .tar.xz files    │
-│   └─ Output files:                                                     │
-│       • therock-blas-linux-gfx94X-dcgpu.tar.xz                         │
-│       • therock-blas-linux-gfx1100.tar.xz                              │
-│       • therock-blas-linux-gfx950-dcgpu.tar.xz                         │
+│   ├─ components: [lib, dev, test, dbg, doc] ← Each gets own .tar.xz  │
+│   └─ Output files (per component, per GPU):                            │
+│       • blas_lib_gfx94X-dcgpu.tar.xz                                   │
+│       • blas_dev_gfx94X-dcgpu.tar.xz                                   │
+│       • blas_test_gfx94X-dcgpu.tar.xz                                  │
+│       • blas_lib_gfx1100.tar.xz                                        │
+│       • blas_dev_gfx1100.tar.xz ... (5 components × 3 GPUs = 15 files)│
 │                                                                         │
 │  [artifacts.compiler]                                                  │
 │   ├─ type: "target-neutral" ← Built once for all GPUs                 │
 │   ├─ artifact_group: "compiler"                                        │
 │   ├─ artifact_deps: ["third-party-sysdeps"]                            │
-│   └─ Output file:                                                      │
-│       • therock-compiler-linux.tar.xz (no GPU suffix!)                 │
+│   ├─ components: [lib, dev, dbg, doc] ← Each gets own .tar.xz         │
+│   └─ Output files (per component, generic):                            │
+│       • compiler_lib_generic.tar.xz                                    │
+│       • compiler_dev_generic.tar.xz                                    │
+│       • compiler_dbg_generic.tar.xz (no GPU suffix - works on all!)   │
 │                                                                         │
 │   1 artifact depends on N other artifacts (1:N relationship)           │
 │   1 artifact belongs to exactly 1 artifact group (N:1 relationship)    │
@@ -1435,11 +1451,15 @@ build/
 # STEP 4: Package artifacts
 ninja -C build artifacts
 
-# Produces (all in build/artifacts/):
-- therock-blas-linux-gfx94X-dcgpu.tar.xz    ← from math-libs/BLAS/rocBLAS/stage/
-- therock-fft-linux-gfx94X-dcgpu.tar.xz     ← from math-libs/FFT/rocFFT/stage/
-- therock-rand-linux-gfx94X-dcgpu.tar.xz    ← from math-libs/RAND/rocRAND/stage/
-- therock-miopen-linux-gfx94X-dcgpu.tar.xz  ← from ml-libs/MIOpen/MIOpen/stage/
+# Produces (all in build/artifacts/, one .tar.xz per component):
+- blas_lib_gfx94X-dcgpu.tar.xz       ← from math-libs/BLAS/rocBLAS/stage/ (lib component)
+- blas_dev_gfx94X-dcgpu.tar.xz       ← from math-libs/BLAS/rocBLAS/stage/ (dev component)
+- blas_test_gfx94X-dcgpu.tar.xz      ← from math-libs/BLAS/rocBLAS/stage/ (test component)
+- fft_lib_gfx94X-dcgpu.tar.xz        ← from math-libs/FFT/rocFFT/stage/ (lib component)
+- fft_dev_gfx94X-dcgpu.tar.xz        ← from math-libs/FFT/rocFFT/stage/ (dev component)
+- rand_lib_gfx94X-dcgpu.tar.xz       ← from math-libs/RAND/rocRAND/stage/ (lib component)
+- miopen_lib_gfx94X-dcgpu.tar.xz     ← from ml-libs/MIOpen/MIOpen/stage/ (lib component)
+... (and dbg, doc components for each artifact)
 ```
 
 **Key Insights:**
@@ -1471,11 +1491,14 @@ cmake -B build \
 ninja -C build
 ninja -C build artifacts
 
-# Produces (same components, different GPU optimization):
-- therock-blas-linux-gfx1100.tar.xz     ← rocBLAS optimized for RX 7000
-- therock-fft-linux-gfx1100.tar.xz      ← rocFFT optimized for RX 7000
-- therock-rand-linux-gfx1100.tar.xz     ← rocRAND optimized for RX 7000
-- therock-miopen-linux-gfx1100.tar.xz   ← MIOpen optimized for RX 7000
+# Produces (same components, different GPU optimization, per-component .tar.xz):
+- blas_lib_gfx1100.tar.xz         ← rocBLAS lib optimized for RX 7000
+- blas_dev_gfx1100.tar.xz         ← rocBLAS dev files for RX 7000
+- fft_lib_gfx1100.tar.xz          ← rocFFT lib optimized for RX 7000
+- fft_dev_gfx1100.tar.xz          ← rocFFT dev files for RX 7000
+- rand_lib_gfx1100.tar.xz         ← rocRAND lib optimized for RX 7000
+- miopen_lib_gfx1100.tar.xz       ← MIOpen lib optimized for RX 7000
+... (and test, dbg, doc components for each)
 ```
 
 **The magic:** Both jobs run at the same time on different machines, each building the same components but with different GPU optimizations!
@@ -1982,17 +2005,22 @@ ninja -C build
 #   Simultaneously, another machine is doing the same for gfx1100
 #   (See "Are Generic Builds Repeated?" section above)
 
-# Result after ~3 hours on 64-core machine:
-#   build/artifacts/therock-blas-linux-gfx94X-dcgpu.tar.xz
-#   build/artifacts/therock-fft-linux-gfx94X-dcgpu.tar.xz
-#   build/artifacts/therock-solver-linux-gfx94X-dcgpu.tar.xz
-#   build/artifacts/therock-rand-linux-gfx94X-dcgpu.tar.xz
+# Result after ~3 hours on 64-core machine (per-component .tar.xz files):
+#   build/artifacts/blas_lib_gfx94X-dcgpu.tar.xz
+#   build/artifacts/blas_dev_gfx94X-dcgpu.tar.xz
+#   build/artifacts/blas_test_gfx94X-dcgpu.tar.xz
+#   build/artifacts/fft_lib_gfx94X-dcgpu.tar.xz
+#   build/artifacts/fft_dev_gfx94X-dcgpu.tar.xz
+#   build/artifacts/solver_lib_gfx94X-dcgpu.tar.xz
+#   build/artifacts/rand_lib_gfx94X-dcgpu.tar.xz
+#   ... (one .tar.xz per component of each artifact)
 
-# 3. CI uploads ALL artifacts to S3
-#   s3://therock-ci-artifacts/{run_id}-linux/therock-blas-linux-gfx94X-dcgpu.tar.xz
-#   s3://therock-ci-artifacts/{run_id}-linux/therock-fft-linux-gfx94X-dcgpu.tar.xz
-#   s3://therock-ci-artifacts/{run_id}-linux/therock-solver-linux-gfx94X-dcgpu.tar.xz
-#   s3://therock-ci-artifacts/{run_id}-linux/therock-rand-linux-gfx94X-dcgpu.tar.xz
+# 3. CI uploads ALL component artifacts to S3
+#   s3://therock-ci-artifacts/{run_id}-linux/blas_lib_gfx94X-dcgpu.tar.xz
+#   s3://therock-ci-artifacts/{run_id}-linux/blas_dev_gfx94X-dcgpu.tar.xz
+#   s3://therock-ci-artifacts/{run_id}-linux/blas_test_gfx94X-dcgpu.tar.xz
+#   s3://therock-ci-artifacts/{run_id}-linux/fft_lib_gfx94X-dcgpu.tar.xz
+#   ... (all component .tar.xz files)
 ```
 
 **CRITICAL: Understanding the 3 Levels of Parallelism**
@@ -2063,7 +2091,32 @@ These are different dimensions of organization, not a strict hierarchy. The same
 
 A portable artifact is a `.tar.xz` file containing everything needed for one component of ROCm.
 
-**Example:** `therock-blas-linux-gfx94X-dcgpu.tar.xz`
+**IMPORTANT: Two Different Artifact Naming Patterns**
+
+TheRock creates TWO different types of archive files with different naming patterns:
+
+1. **CI Build Artifacts** (this section - Stage 1):
+   - **Naming:** `{artifact}_{component}_{target}.tar.xz`
+   - **Examples:**
+     - `blas_lib_gfx94X-dcgpu.tar.xz` (just the runtime library component)
+     - `blas_dev_gfx94X-dcgpu.tar.xz` (just the development files component)
+     - `blas_test_gfx94X-dcgpu.tar.xz` (just the test binaries component)
+   - **Created by:** `ninja artifacts` target (cmake/therock_artifacts.cmake)
+   - **Purpose:** Individual component artifacts uploaded to S3 after CI builds
+   - **Split:** Each component gets its own `.tar.xz` file
+   - **Location:** `build/artifacts/` → uploaded to S3
+
+2. **Distribution Tarballs** (later packaging stages):
+   - **Naming:** `therock-dist-linux-{family}-{version}.tar.gz`
+   - **Examples:**
+     - `therock-dist-linux-gfx94X-dcgpu-7.10.0a20251124.tar.gz` (nightly build)
+     - `therock-dist-linux-gfx94X-dcgpu-7.10.0.dev0+f689a8ea.tar.gz` (dev release)
+   - **Created by:** Packaging workflows (build_tools/packaging/)
+   - **Purpose:** Complete ROCm installation for end users
+   - **Bundled:** Contains multiple artifacts and all their components combined
+   - **Location:** Published to https://rocm.nightlies.amd.com/tarball/
+
+**In this section (Part 3), we focus exclusively on CI Build Artifacts using the `{artifact}_{component}_{target}.tar.xz` naming pattern.**
 
 **CRITICAL: Understanding the Complete Build-to-Package Flow**
 
@@ -2257,9 +2310,9 @@ include = [
 
 ↓ *ninja artifacts (runs packaging)*
 
-#### STEP 5: Final Package (.tar.xz)
+#### STEP 5: Final Package (.tar.xz archives - ONE PER COMPONENT)
 
-**Location:** `build/artifacts/therock-blas-linux-gfx94X-dcgpu.tar.xz`
+**Location:** `build/artifacts/{artifact}_{component}_{target}.tar.xz`
 
 **Command that creates this:**
 ```bash
@@ -2269,28 +2322,40 @@ ninja -C build artifacts
 **What happens:**
 1. Reads artifact-blas.toml
 2. Collects matching files from build/math-libs/BLAS/rocBLAS/stage/
-3. Creates .tar.xz archive with selected files
-4. Names it: `therock-{artifact}-{platform}-{gpu}.tar.xz`
+3. **Creates SEPARATE .tar.xz archive for EACH component** (lib, dev, test, dbg, doc)
+4. Names each: `{artifact}_{component}_{target}.tar.xz`
 
-**Final archive contents:**
+**Example outputs for blas artifact:**
 ```
-therock-blas-linux-gfx94X-dcgpu.tar.xz contains:
+build/artifacts/blas_lib_gfx94X-dcgpu.tar.xz
+build/artifacts/blas_dev_gfx94X-dcgpu.tar.xz
+build/artifacts/blas_test_gfx94X-dcgpu.tar.xz
+build/artifacts/blas_dbg_gfx94X-dcgpu.tar.xz
+build/artifacts/blas_doc_gfx94X-dcgpu.tar.xz
+```
 
-# From components.lib (runtime library)
+**Final archive contents (showing what goes in EACH .tar.xz file):**
+```
+blas_lib_gfx94X-dcgpu.tar.xz contains:
+
+# Runtime library component ONLY
 lib/librocblas.so.4.0.0              # Shared library (auto-included)
 lib/librocblas.so.4 → librocblas.so.4.0.0
 lib/rocblas/library/TensileLibrary_gfx942.dat
 bin/rocblas/library/...
 
-# From components.dev (development files)
+blas_dev_gfx94X-dcgpu.tar.xz contains:
+# Development files component ONLY
 include/rocblas/rocblas.h            # Header files
 include/rocblas/rocblas-types.h
 lib/cmake/rocblas/rocblas-config.cmake
 
-# From components.doc (documentation)
+blas_doc_gfx94X-dcgpu.tar.xz contains:
+# Documentation component ONLY
 share/rocblas/rocblas_clients_readme.txt
 
-# From components.test (test binaries and data)
+blas_test_gfx94X-dcgpu.tar.xz contains:
+# Test binaries and data component ONLY
 bin/rocblas-bench                    # Benchmark executable
 bin/rocblas-gemm-tune
 bin/rocblas-test                     # Test executable
@@ -2298,13 +2363,17 @@ bin/rocblas_gentest.py
 bin/rocblas_gtest.data
 bin/rocblas_*.yaml
 
-# From components.dbg (debug symbols)
+blas_dbg_gfx94X-dcgpu.tar.xz contains:
+# Debug symbols component ONLY
 lib/.debug/librocblas.so.4.0.0.debug
 ```
 
 **This is the FINAL PACKAGE** - ready to distribute and install
 
-**Note:** All five components (dbg, dev, doc, lib, test) are bundled into the single `.tar.xz` file. During Python/DEB/RPM packaging (later stages), these components can be split into separate packages like `rocm-blas` (lib), `rocm-blas-dev` (dev), `rocm-blas-tests` (test), etc.
+**CRITICAL:** Each component gets its own separate `.tar.xz` file. They are NOT bundled together at this stage. This allows:
+1. **S3 uploads** - Upload only changed components after incremental builds
+2. **Downstream flexibility** - Python/DEB/RPM packaging can download only needed components
+3. **Size efficiency** - Users don't download test binaries if they only need the runtime library
 
 **Key Points:**
 
@@ -2322,8 +2391,12 @@ rocm-libraries/rocBLAS/                       ← SOURCE (raw C++ code)
 build/math-libs/BLAS/rocBLAS/build/           ← BUILD (compiled .o, .so)
         ↓ ninja install
 build/math-libs/BLAS/rocBLAS/stage/           ← STAGE (organized for /opt/rocm/)
-        ↓ ninja artifacts (reads artifact-blas.toml)
-build/artifacts/therock-blas-linux-*.tar.xz   ← PACKAGE (final distributable)
+        ↓ ninja artifacts (reads artifact-blas.toml, creates one .tar.xz per component)
+build/artifacts/blas_lib_gfx94X-dcgpu.tar.xz  ← PACKAGE (lib component)
+build/artifacts/blas_dev_gfx94X-dcgpu.tar.xz  ← PACKAGE (dev component)
+build/artifacts/blas_test_gfx94X-dcgpu.tar.xz ← PACKAGE (test component)
+build/artifacts/blas_dbg_gfx94X-dcgpu.tar.xz  ← PACKAGE (dbg component)
+build/artifacts/blas_doc_gfx94X-dcgpu.tar.xz  ← PACKAGE (doc component)
 ```
 
 **Why "portable"?**
@@ -2436,17 +2509,21 @@ Almost identical to Linux, except:
 - Uses Visual Studio compiler instead of Clang
 - Produces `.tar.xz` files with Windows binaries
 
-**Output:**
+**Output (same per-component split as Linux):**
 
 ```
 s3://therock-ci-artifacts/21440027240-windows/
 ├── index-gfx94X-dcgpu.html
-├── therock-base-windows-gfx94X-dcgpu.tar.xz
-├── therock-compiler-windows-gfx94X-dcgpu.tar.xz
-├── therock-core-windows-gfx94X-dcgpu.tar.xz
-├── therock-blas-windows-gfx94X-dcgpu.tar.xz
-├── therock-fft-windows-gfx94X-dcgpu.tar.xz
-└── ... (one .tar.xz per artifact, each containing all components bundled)
+├── base_lib_generic.tar.xz
+├── base_dev_generic.tar.xz
+├── compiler_lib_generic.tar.xz
+├── compiler_dev_generic.tar.xz
+├── core_lib_gfx94X-dcgpu.tar.xz
+├── core_dev_gfx94X-dcgpu.tar.xz
+├── blas_lib_gfx94X-dcgpu.tar.xz
+├── blas_dev_gfx94X-dcgpu.tar.xz
+├── fft_lib_gfx94X-dcgpu.tar.xz
+└── ... (one .tar.xz per component)
 ```
 
 ### Artifact Slicing: One Build → Multiple .tar.xz Files
@@ -2630,12 +2707,14 @@ def libraries_artifact_filter(target_family: str, an: ArtifactName) -> bool:
 **Step 2: Extract Artifacts**
 
 ```bash
-# Extract each selected .tar.xz
+# Extract each selected component .tar.xz (only lib components needed for runtime wheel)
 cd /tmp/staging/rocm_sdk_libraries_gfx94X_dcgpu/
 
-tar -xJf /tmp/artifacts/therock-blas-linux-gfx94X-dcgpu.tar.xz
-tar -xJf /tmp/artifacts/therock-fft-linux-gfx94X-dcgpu.tar.xz
-# ... repeat for each math library
+tar -xJf /tmp/artifacts/blas_lib_gfx94X-dcgpu.tar.xz
+tar -xJf /tmp/artifacts/fft_lib_gfx94X-dcgpu.tar.xz
+tar -xJf /tmp/artifacts/rand_lib_gfx94X-dcgpu.tar.xz
+tar -xJf /tmp/artifacts/solver_lib_gfx94X-dcgpu.tar.xz
+# ... repeat for each math library (only lib component, not dev/test/dbg/doc)
 ```
 
 **Directory structure:**
@@ -3022,17 +3101,20 @@ aws s3 sync /tmp/packages/rpm/ s3://therock-nightly-packages/gfx94X-dcgpu/x86_64
 
 Let's trace how a DEB package is created for rocBLAS.
 
-**Step 1: Extract Artifact**
+**Step 1: Extract Component Artifacts**
 
 ```bash
 cd /tmp/staging/rocm-blas/
 
-tar -xJf /tmp/artifacts/therock-blas-linux-gfx94X-dcgpu.tar.xz
+# Extract each component separately (they're already split into separate .tar.xz files)
+tar -xJf /tmp/artifacts/blas_lib_gfx94X-dcgpu.tar.xz
+tar -xJf /tmp/artifacts/blas_dev_gfx94X-dcgpu.tar.xz
+tar -xJf /tmp/artifacts/blas_test_gfx94X-dcgpu.tar.xz
 ```
 
-**Step 2: Split into Package Components**
+**Step 2: Map Components to DEB Packages**
 
-The artifact contains multiple components (lib, dev, test). We create separate packages:
+Each component .tar.xz becomes a separate DEB package:
 
 ```
 rocm-blas            # Runtime libraries (lib component)
@@ -3621,21 +3703,29 @@ build/math-libs/BLAS/rocBLAS/stage/
 # Artifact creation:
 ninja -C build artifacts
 
-# Creates:
-build/artifacts/therock-blas-linux-gfx94X-dcgpu.tar.xz  (65 MB compressed)
+# Creates (one .tar.xz per component):
+build/artifacts/blas_lib_gfx94X-dcgpu.tar.xz   (65 MB compressed - runtime libs)
+build/artifacts/blas_dev_gfx94X-dcgpu.tar.xz   (2 MB - headers, cmake files)
+build/artifacts/blas_test_gfx94X-dcgpu.tar.xz  (120 MB - test binaries)
+build/artifacts/blas_dbg_gfx94X-dcgpu.tar.xz   (800 MB - debug symbols)
+build/artifacts/blas_doc_gfx94X-dcgpu.tar.xz   (1 MB - documentation)
 
-# Upload:
-s3://therock-ci-artifacts/21440027240-linux/therock-blas-linux-gfx94X-dcgpu.tar.xz
+# Upload (all components):
+s3://therock-ci-artifacts/21440027240-linux/blas_lib_gfx94X-dcgpu.tar.xz
+s3://therock-ci-artifacts/21440027240-linux/blas_dev_gfx94X-dcgpu.tar.xz
+s3://therock-ci-artifacts/21440027240-linux/blas_test_gfx94X-dcgpu.tar.xz
+s3://therock-ci-artifacts/21440027240-linux/blas_dbg_gfx94X-dcgpu.tar.xz
+s3://therock-ci-artifacts/21440027240-linux/blas_doc_gfx94X-dcgpu.tar.xz
 ```
 
 ### Stage 2A: Python Packaging
 
 ```bash
-# Download artifact
-aws s3 cp s3://therock-ci-artifacts/21440027240-linux/therock-blas-linux-gfx94X-dcgpu.tar.xz .
+# Download ONLY the lib component (Python runtime wheel doesn't need dev/test/dbg)
+aws s3 cp s3://therock-ci-artifacts/21440027240-linux/blas_lib_gfx94X-dcgpu.tar.xz .
 
 # Extract
-tar -xJf therock-blas-linux-gfx94X-dcgpu.tar.xz
+tar -xJf blas_lib_gfx94X-dcgpu.tar.xz
 
 # Filter (keep lib component only for runtime wheel)
 # Remove symlinks (keep SONAME only)
