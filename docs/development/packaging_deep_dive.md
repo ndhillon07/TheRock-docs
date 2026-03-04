@@ -2096,6 +2096,13 @@ rocm-libraries/rocBLAS/CMakeLists.txt
 
 **Location:** `build/math-libs/BLAS/rocBLAS/build/`
 
+**Where this path comes from:**
+- `build/` - CMake build directory (specified with `-B build` in top-level cmake command)
+- `math-libs/` - From `add_subdirectory(math-libs)` in root CMakeLists.txt
+- `BLAS/` - From `add_subdirectory(BLAS)` in math-libs/CMakeLists.txt
+- `rocBLAS/` - Specified in math-libs/BLAS/CMakeLists.txt:182 as `BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/rocBLAS"`
+- `build/` - The actual CMake build subdirectory for rocBLAS
+
 **CMake command that creates this:**
 ```bash
 cmake -B build/math-libs/BLAS/rocBLAS/build \
