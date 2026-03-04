@@ -83,8 +83,11 @@ Here's how CI builds and packages TheRock every night:
 │ ├── therock-base-linux-gfx94X.tar.xz                       │
 │ ├── therock-compiler-linux-gfx94X.tar.xz                   │
 │ ├── therock-core-linux-gfx94X.tar.xz                       │
-│ ├── therock-math-libs-linux-gfx94X.tar.xz                  │
-│ └── (same for Windows)                                      │
+│ ├── therock-blas-linux-gfx94X-dcgpu.tar.xz                 │
+│ ├── therock-fft-linux-gfx94X-dcgpu.tar.xz                  │
+│ ├── therock-rand-linux-gfx94X-dcgpu.tar.xz                 │
+│ ├── therock-miopen-linux-gfx94X-dcgpu.tar.xz               │
+│ └── ... (one per artifact, for each GPU family)             │
 └────────────────────────┬────────────────────────────────────┘
                          │
                          │ Download artifacts
@@ -2374,8 +2377,12 @@ s3://therock-ci-artifacts/21440027240-linux/
 ├── therock-base-linux-gfx94X-dcgpu.tar.xz
 ├── therock-compiler-linux-gfx94X-dcgpu.tar.xz
 ├── therock-core-linux-gfx94X-dcgpu.tar.xz
-├── therock-math-libs-linux-gfx94X-dcgpu.tar.xz
-└── ... (one per component)
+├── therock-blas-linux-gfx94X-dcgpu.tar.xz
+├── therock-fft-linux-gfx94X-dcgpu.tar.xz
+├── therock-rand-linux-gfx94X-dcgpu.tar.xz
+├── therock-solver-linux-gfx94X-dcgpu.tar.xz
+├── therock-miopen-linux-gfx94X-dcgpu.tar.xz
+└── ... (one .tar.xz per artifact)
 ```
 
 The `index-gfx94X-dcgpu.html` is a simple web page listing all files, making it easy to download them.
