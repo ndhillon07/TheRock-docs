@@ -2108,11 +2108,13 @@ rocm-libraries/rocBLAS/CMakeLists.txt
 
 **CMake command that creates this:**
 ```bash
-cmake -B build/math-libs/BLAS/rocBLAS/build \
-      -S rocm-libraries/rocBLAS \
-      -DCMAKE_INSTALL_PREFIX=build/math-libs/BLAS/rocBLAS/stage \
+cmake -B build/math-libs/BLAS/rocBLAS/build \              # Build dir (where .o files go)
+      -S rocm-libraries/rocBLAS \                          # Source dir (where .cpp files are)
+      -DCMAKE_INSTALL_PREFIX=build/math-libs/BLAS/rocBLAS/stage \  # Install dir (STEP 3)
       -DAMDGPU_TARGETS=gfx942
 ```
+
+**Note:** The `-DCMAKE_INSTALL_PREFIX` tells CMake where to install files in STEP 3.
 
 **What happens here:**
 - C++ source files are compiled to object files (.o)
@@ -2134,6 +2136,11 @@ build/math-libs/BLAS/rocBLAS/build/clients/benchmarks/rocblas-bench
 #### STEP 3: Stage Directory (CMake Install Tree)
 
 **Location:** `build/math-libs/BLAS/rocBLAS/stage/`
+
+**Where this path comes from:**
+- `build/math-libs/BLAS/rocBLAS/` - Same as STEP 2 (parent directory structure)
+- `stage/` - Set as `CMAKE_INSTALL_PREFIX` in the cmake command above (line 2113)
+- This is where TheRock configures each subproject to install: `<subproject_path>/stage/`
 
 **CMake command that populates this:**
 ```bash
