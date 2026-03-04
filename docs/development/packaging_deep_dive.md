@@ -2033,7 +2033,6 @@ ninja -C build
 - In CI, we enable MANY components (not just blas), so ninja has lots to parallelize
 - ONE machine builds multiple components in parallel using all CPU cores
 - MULTIPLE machines build for different GPUs simultaneously (machine-level parallelism)
-```
 
 ### Summary: The Four Levels in Simple Terms
 
@@ -2123,31 +2122,34 @@ build/math-libs/BLAS/rocBLAS/build/clients/benchmarks/rocblas-bench
 ↓ *ninja install (copies files to install prefix)*
 
 #### STEP 3: Stage Directory (CMake Install Tree)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Location: build/math-libs/BLAS/rocBLAS/stage/
 
-CMake command that populates this:
-  ninja -C build/math-libs/BLAS/rocBLAS/build install
+**Location:** `build/math-libs/BLAS/rocBLAS/stage/`
 
-What happens:
-  • CMake copies built files to CMAKE_INSTALL_PREFIX location
-  • Files are organized in standard FHS layout (lib/, bin/, include/)
-  • This is the "install tree" - ready to be deployed to /opt/rocm/
+**CMake command that populates this:**
+```bash
+ninja -C build/math-libs/BLAS/rocBLAS/build install
+```
 
-Files in stage/:
-  build/math-libs/BLAS/rocBLAS/stage/lib/librocblas.so.4.0.0
-  build/math-libs/BLAS/rocBLAS/stage/lib/librocblas.so.4 → librocblas.so.4.0.0
-  build/math-libs/BLAS/rocBLAS/stage/lib/rocblas/library/TensileLibrary_gfx942.dat
-  build/math-libs/BLAS/rocBLAS/stage/bin/rocblas-bench
-  build/math-libs/BLAS/rocBLAS/stage/include/rocblas/rocblas.h
-  build/math-libs/BLAS/rocBLAS/stage/lib/cmake/rocblas/rocblas-config.cmake
+**What happens:**
+- CMake copies built files to CMAKE_INSTALL_PREFIX location
+- Files are organized in standard FHS layout (lib/, bin/, include/)
+- This is the "install tree" - ready to be deployed to /opt/rocm/
 
-This is the INSTALL TREE - organized exactly like it will appear in /opt/rocm/
+**Files in stage/:**
+```
+build/math-libs/BLAS/rocBLAS/stage/lib/librocblas.so.4.0.0
+build/math-libs/BLAS/rocBLAS/stage/lib/librocblas.so.4 → librocblas.so.4.0.0
+build/math-libs/BLAS/rocBLAS/stage/lib/rocblas/library/TensileLibrary_gfx942.dat
+build/math-libs/BLAS/rocBLAS/stage/bin/rocblas-bench
+build/math-libs/BLAS/rocBLAS/stage/include/rocblas/rocblas.h
+build/math-libs/BLAS/rocBLAS/stage/lib/cmake/rocblas/rocblas-config.cmake
+```
+
+**This is the INSTALL TREE** - organized exactly like it will appear in /opt/rocm/
 
 ↓ *Packaging system reads artifact-blas.toml*
 
 #### STEP 4: Package Selection (artifact-blas.toml)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 **Location:** `math-libs/BLAS/artifact-blas.toml`
 
@@ -2189,7 +2191,6 @@ include = [
 ↓ *ninja artifacts (runs packaging)*
 
 #### STEP 5: Final Package (.tar.xz)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 **Location:** `build/artifacts/therock-blas-linux-gfx94X-dcgpu.tar.xz`
 
