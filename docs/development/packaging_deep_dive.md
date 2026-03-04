@@ -2154,6 +2154,41 @@ build/math-libs/BLAS/rocBLAS/stage/lib/cmake/rocblas/rocblas-config.cmake
 
 **This is the INSTALL TREE** - organized exactly like it will appear in /opt/rocm/
 
+**How the install tree structure is decided:**
+
+The directory structure comes from **CMake `install()` commands** in each project's CMakeLists.txt:
+
+1. **Standard locations** (via `include(GNUInstallDirs)`):
+   - `${CMAKE_INSTALL_BINDIR}` → `bin/` (executables)
+   - `${CMAKE_INSTALL_LIBDIR}` → `lib/` (shared libraries)
+   - `${CMAKE_INSTALL_INCLUDEDIR}` → `include/` (header files)
+   - `${CMAKE_INSTALL_DATADIR}` → `share/` (data files)
+
+2. **Example from rocBLAS's CMakeLists.txt:**
+   ```cmake
+   # Install the library
+   install(TARGETS rocblas LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
+
+   # Install headers
+   install(DIRECTORY include/rocblas DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+
+   # Install CMake config files
+   install(FILES rocblas-config.cmake DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/rocblas)
+
+   # Install kernel databases
+   install(FILES TensileLibrary_gfx942.dat DESTINATION ${CMAKE_INSTALL_LIBDIR}/rocblas/library)
+   ```
+
+3. **The CMAKE_INSTALL_PREFIX determines the root:**
+   - Set to `build/math-libs/BLAS/rocBLAS/stage` for rocBLAS
+   - All install paths are relative to this prefix
+   - Result: `${CMAKE_INSTALL_PREFIX}/lib/librocblas.so` → `build/math-libs/BLAS/rocBLAS/stage/lib/librocblas.so`
+
+4. **This matches the final install location:**
+   - When users install ROCm, CMAKE_INSTALL_PREFIX = `/opt/rocm`
+   - Same install commands create `/opt/rocm/lib/librocblas.so`
+   - The `stage/` directory is a preview of the final installation
+
 ↓ *Packaging system reads artifact-blas.toml*
 
 #### STEP 4: Package Selection (artifact-blas.toml)
