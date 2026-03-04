@@ -2198,28 +2198,43 @@ The directory structure comes from **CMake `install()` commands** in each projec
 This TOML file defines how to slice the stage/ directory into multiple .tar.xz packages:
 
 ```toml
-# File: math-libs/BLAS/artifact-blas.toml
-# This TOML file selects which files from stage/ go into the .tar.xz
+# File: math-libs/BLAS/artifact-blas.toml (rocBLAS excerpt)
+
+# Component: Debug symbols (for debugging)
+[components.dbg."math-libs/BLAS/rocBLAS/stage"]
+# Uses defaults: captures .debug files, debug symbols
+
+# Component: Development files (headers, CMake configs)
+[components.dev."math-libs/BLAS/rocBLAS/stage"]
+# Uses defaults: include/**, lib/cmake/**
+
+# Component: Documentation files
+[components.doc."math-libs/BLAS/rocBLAS/stage"]
+include = [
+  "**/rocblas_clients_readme.txt",
+]
 
 # Component: Runtime library (what users need to run applications)
 [components.lib."math-libs/BLAS/rocBLAS/stage"]
 include = [
-  "lib/librocblas.so*",              # The library itself
-  "lib/rocblas/library/**",          # Kernel database files
+  "bin/rocblas/library/**",         # Library metadata
+  "lib/rocblas/library/**",         # Kernel database files (.dat)
 ]
+# Note: lib/librocblas.so* is included by default
 
-# Component: Development files (what developers need to compile)
-[components.dev."math-libs/BLAS/rocBLAS/stage"]
-include = [
-  "include/rocblas/**",              # Header files
-  "lib/cmake/rocblas/**",            # CMake config files
-]
-
-# Component: Test binaries (optional, for testing)
+# Component: Test binaries and data (for validation)
 [components.test."math-libs/BLAS/rocBLAS/stage"]
 include = [
-  "bin/rocblas-bench",
-  "bin/rocblas-test",
+  # Benchmarks
+  "bin/rocblas-bench*",
+  "bin/rocblas-gemm-tune*",
+  # Test executables
+  "bin/rocblas-test*",
+  "bin/rocblas_gentest.py",
+  "bin/rocblas_gtest.data",
+  "bin/rocblas_*.yaml",
+  "bin/*_rtest.xml",
+  "bin/*_rtest.py",
 ]
 ```
 
@@ -2250,14 +2265,36 @@ ninja -C build artifacts
 **Final archive contents:**
 ```
 therock-blas-linux-gfx94X-dcgpu.tar.xz contains:
-  lib/librocblas.so.4.0.0
-  lib/librocblas.so.4 → librocblas.so.4.0.0
-  lib/rocblas/library/TensileLibrary_gfx942.dat
-  include/rocblas/rocblas.h
-  lib/cmake/rocblas/rocblas-config.cmake
+
+# From components.lib (runtime library)
+lib/librocblas.so.4.0.0              # Shared library (auto-included)
+lib/librocblas.so.4 → librocblas.so.4.0.0
+lib/rocblas/library/TensileLibrary_gfx942.dat
+bin/rocblas/library/...
+
+# From components.dev (development files)
+include/rocblas/rocblas.h            # Header files
+include/rocblas/rocblas-types.h
+lib/cmake/rocblas/rocblas-config.cmake
+
+# From components.doc (documentation)
+share/rocblas/rocblas_clients_readme.txt
+
+# From components.test (test binaries and data)
+bin/rocblas-bench                    # Benchmark executable
+bin/rocblas-gemm-tune
+bin/rocblas-test                     # Test executable
+bin/rocblas_gentest.py
+bin/rocblas_gtest.data
+bin/rocblas_*.yaml
+
+# From components.dbg (debug symbols)
+lib/.debug/librocblas.so.4.0.0.debug
 ```
 
 **This is the FINAL PACKAGE** - ready to distribute and install
+
+**Note:** All five components (dbg, dev, doc, lib, test) are bundled into the single `.tar.xz` file. During Python/DEB/RPM packaging (later stages), these components can be split into separate packages like `rocm-blas` (lib), `rocm-blas-dev` (dev), `rocm-blas-tests` (test), etc.
 
 **Key Points:**
 
