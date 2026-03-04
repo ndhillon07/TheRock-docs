@@ -160,21 +160,21 @@ ROCm has dozens of components (compilers, libraries, tools). BUILD_TOPOLOGY.toml
 
 ### Who Reads BUILD_TOPOLOGY.toml? (Critical Distinction!)
 
-**BUILD_TOPOLOGY.toml is read by TWO completely different systems:**
+**CRITICAL: configure_ci.py does NOT read BUILD_TOPOLOGY.toml!**
 
-1. **CMake** (via `topology_to_cmake.py`) - Generates build targets for local builds
-2. **GitHub Actions** (via `configure_ci.py`) - Creates parallel CI jobs
+Let's be very clear about what reads what:
 
-**These do completely different things!** Let's be very clear:
-
-| System | What It Does | When | Input | Output |
+| System | What Reads It | What It Reads | What It Does | Output |
 |---|---|---|---|---|
-| **CMake** | Builds software on ONE machine | When you run `cmake -B build` | BUILD_TOPOLOGY.toml | CMake targets, feature flags |
-| **GitHub Actions** | Orchestrates MULTIPLE build machines | When CI runs | BUILD_TOPOLOGY.toml + amdgpu_family_matrix.py | Parallel CI jobs |
+| **GitHub Actions** | configure_ci.py | amdgpu_family_matrix.py ONLY | Creates parallel CI job matrix | JSON: which GPU families to build |
+| **Build Jobs** | fetch_sources.py, configure_stage.py, etc. | BUILD_TOPOLOGY.toml | Determines what to build in each job | Submodule list, CMake flags |
+| **CMake** | topology_to_cmake.py | BUILD_TOPOLOGY.toml | Generates build system | CMake targets, feature flags |
 
-**Key insight:**
-- **CMake doesn't create parallel jobs** - it just builds what you tell it
-- **GitHub Actions creates parallel jobs** - it reads the topology and spawns multiple CMake builds
+**Key insights:**
+- **configure_ci.py** creates the matrix of parallel jobs from **amdgpu_family_matrix.py** (NOT BUILD_TOPOLOGY.toml!)
+- **BUILD_TOPOLOGY.toml** is read LATER by scripts that run inside each build job
+- **CMake doesn't create parallel jobs** - GitHub Actions does that
+- Verify yourself: `grep BUILD_TOPOLOGY build_tools/github_actions/configure_ci.py` → No matches!
 
 ### How CMake Processes BUILD_TOPOLOGY.toml
 
@@ -241,6 +241,10 @@ ROCm has dozens of components (compilers, libraries, tools). BUILD_TOPOLOGY.toml
 
 ### How GitHub Actions Processes BUILD_TOPOLOGY.toml
 
+**CRITICAL: configure_ci.py does NOT read BUILD_TOPOLOGY.toml!**
+
+Let me show you the complete chain with actual file verification:
+
 **This happens in CI when code is pushed to GitHub:**
 
 ```
@@ -251,16 +255,27 @@ ROCm has dozens of components (compilers, libraries, tools). BUILD_TOPOLOGY.toml
                          │
                          ↓
 ┌─────────────────────────────────────────────────────────────┐
-│ STEP 2: Setup Job Runs                                      │
+│ STEP 2: Setup Job Runs configure_ci.py                      │
 │                                                              │
 │   - name: Configuring CI options                            │
 │     run: ./build_tools/github_actions/configure_ci.py       │
 │                                                              │
-│ This Python script:                                          │
-│   1. Reads BUILD_TOPOLOGY.toml                              │
-│   2. Reads build_tools/github_actions/amdgpu_family_matrix.py│
-│   3. Determines which GPU families to build                 │
-│   4. Creates a JSON matrix of build jobs                    │
+│ File: build_tools/github_actions/configure_ci.py            │
+│ Line 57-58: Shows what it imports:                          │
+│   from amdgpu_family_matrix import (                        │
+│       all_build_variants,                                   │
+│       get_all_families_for_trigger_types,                   │
+│   )                                                          │
+│                                                              │
+│ ⚠️  DOES NOT IMPORT BUILD_TOPOLOGY - verify yourself!       │
+│ ⚠️  Run: grep -n "BUILD_TOPOLOGY\|build_topology"           │
+│           build_tools/github_actions/configure_ci.py        │
+│     Result: No matches found                                │
+│                                                              │
+│ This script:                                                 │
+│   1. Reads amdgpu_family_matrix.py (GPU families ONLY)      │
+│   2. Creates a JSON matrix of build jobs                    │
+│   3. Does NOT read BUILD_TOPOLOGY.toml at all!              │
 └────────────────────────┬────────────────────────────────────┘
                          │
                          ↓
@@ -272,6 +287,8 @@ ROCm has dozens of components (compilers, libraries, tools). BUILD_TOPOLOGY.toml
 │   {family: "gfx1100", variant: "release"},                  │
 │   {family: "gfx950-dcgpu", variant: "release"}              │
 │ ]                                                            │
+│                                                              │
+│ ⚠️  Notice: This only has GPU families, no build stages!    │
 └────────────────────────┬────────────────────────────────────┘
                          │
                          ↓
@@ -292,38 +309,64 @@ ROCm has dozens of components (compilers, libraries, tools). BUILD_TOPOLOGY.toml
                          │
                          ↓
 ┌─────────────────────────────────────────────────────────────┐
-│ STEP 5: Each Job Runs CMake Independently                   │
+│ STEP 5: INSIDE Each Build Job - THIS is where               │
+│         BUILD_TOPOLOGY.toml gets read!                       │
 │                                                              │
-│ Machine A:                                                   │
+│ Each job checks out code and runs:                          │
+│                                                              │
+│   - name: Fetch sources                                      │
+│     run: ./build_tools/fetch_sources.py --jobs 12           │
+│                                                              │
+│ File: build_tools/fetch_sources.py                          │
+│ Line 22: TOPOLOGY_PATH = THEROCK_DIR / "BUILD_TOPOLOGY.toml"│
+│ Line 95-98: Opens and reads BUILD_TOPOLOGY.toml:            │
+│   topology = BuildTopology(str(TOPOLOGY_PATH))              │
+│                                                              │
+│ ✓ Verify: grep -n "BUILD_TOPOLOGY" build_tools/fetch_sources.py│
+│   Result: Line 22, 25, 95, etc. - FOUND!                    │
+│                                                              │
+│   - name: Configure Projects                                 │
+│     run: python3 build_tools/github_actions/build_configure.py│
+│                                                              │
+│ This eventually calls:                                       │
 │   cmake -B build -DTHEROCK_AMDGPU_FAMILIES=gfx94X-dcgpu     │
-│   ninja -C build                                             │
 │                                                              │
-│ Machine B (at the same time):                               │
-│   cmake -B build -DTHEROCK_AMDGPU_FAMILIES=gfx1100          │
-│   ninja -C build                                             │
+│ Which triggers topology_to_cmake.py:                         │
 │                                                              │
-│ Machine C (at the same time):                               │
-│   cmake -B build -DTHEROCK_AMDGPU_FAMILIES=gfx950-dcgpu     │
-│   ninja -C build                                             │
+│ File: build_tools/topology_to_cmake.py                      │
+│ Line 317: topology = BuildTopology(str(topology_path))      │
+│                                                              │
+│ ✓ Verify: grep -n "BuildTopology" build_tools/topology_to_cmake.py│
+│   Result: Line 48, 317 - FOUND!                             │
+│                                                              │
+│   - name: Build therock-archives                             │
+│     run: cmake --build build --target therock-archives       │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**The actual Python scripts:**
+**The actual file chain - with verification commands:**
 
 ```python
-# build_tools/github_actions/configure_ci.py
-# This reads BUILD_TOPOLOGY.toml and amdgpu_family_matrix.py
+# File 1: build_tools/github_actions/configure_ci.py
+# Line 57-58 (verify: grep -n "^from amdgpu" configure_ci.py)
+from amdgpu_family_matrix import (
+    all_build_variants,
+    get_all_families_for_trigger_types,
+)
 
-from amdgpu_family_matrix import get_all_families_for_trigger_types
+# ⚠️  Does NOT import BUILD_TOPOLOGY!
+# Verify: grep -n "BUILD_TOPOLOGY\|BuildTopology" configure_ci.py
+#   Result: No matches found
 
-# Get GPU families from amdgpu_family_matrix.py
-families = get_all_families_for_trigger_types(...)
+
+# Get GPU families from amdgpu_family_matrix.py (NOT from BUILD_TOPOLOGY.toml!)
+families = get_all_families_for_trigger_types(["presubmit", "postsubmit", "nightly"])
 
 # For each family, create a matrix entry
 linux_variants = []
-for family in families:
+for family_name, family_config in families.items():
     linux_variants.append({
-        "family": family,
+        "family": family_config["linux"]["family"],  # e.g., "gfx94X-dcgpu"
         "variant": "release"
     })
 
@@ -380,6 +423,23 @@ Each build job runs these scripts (which DO read BUILD_TOPOLOGY.toml):
   ├─ fetch_sources.py → downloads submodules based on BUILD_TOPOLOGY.toml
   └─ topology_to_cmake.py → generates CMake code from BUILD_TOPOLOGY.toml
 ```
+
+**Complete file verification table:**
+
+| Script | Reads BUILD_TOPOLOGY.toml? | Reads amdgpu_family_matrix.py? | Verification Command |
+|--------|---------------------------|-------------------------------|---------------------|
+| **configure_ci.py** | ❌ NO | ✅ YES | `grep -n "BUILD_TOPOLOGY" build_tools/github_actions/configure_ci.py` → No matches |
+| **topology_to_cmake.py** | ✅ YES | ❌ NO | `grep -n "BuildTopology" build_tools/topology_to_cmake.py` → Lines 48, 317 |
+| **configure_stage.py** | ✅ YES | ❌ NO | `grep -n "BUILD_TOPOLOGY" build_tools/configure_stage.py` → Lines 64, 68, 70 |
+| **fetch_sources.py** | ✅ YES | ❌ NO | `grep -n "BUILD_TOPOLOGY" build_tools/fetch_sources.py` → Lines 22, 25, 95, etc. |
+| **artifact_manager.py** | ✅ YES | ❌ NO | `grep -n "BUILD_TOPOLOGY" build_tools/artifact_manager.py` → Lines 20, 22, 24 |
+
+**The two data sources serve different purposes:**
+
+| Data Source | Contains | Used By | Purpose |
+|-------------|----------|---------|---------|
+| **amdgpu_family_matrix.py** | GPU families (gfx94X, gfx1100), test runners, build variants | configure_ci.py | GitHub Actions matrix creation - decides WHICH machines to run |
+| **BUILD_TOPOLOGY.toml** | Build stages, artifact groups, artifacts, dependencies | Scripts inside build jobs | Determines WHAT to build and HOW to organize it |
 
 ### Are Generic Builds Repeated in Each Matrix Job?
 
