@@ -2141,9 +2141,12 @@ This is the INSTALL TREE - organized exactly like it will appear in /opt/rocm/
 STEP 4: Package Selection (artifact-blas.toml)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Location: math-libs/BLAS/artifact-blas.toml
+```
 
-File: math-libs/BLAS/artifact-blas.toml
+This TOML file defines how to slice the stage/ directory into multiple .tar.xz packages:
+
 ```toml
+# File: math-libs/BLAS/artifact-blas.toml
 # This TOML file selects which files from stage/ go into the .tar.xz
 
 # Component: Runtime library (what users need to run applications)
