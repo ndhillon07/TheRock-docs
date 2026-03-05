@@ -2608,6 +2608,170 @@ One build, flexible packaging.
 
 ---
 
+## Part 3B: Creating Distribution Tarballs (therock-dist-*.tar.gz)
+
+### What is a Distribution Tarball?
+
+A distribution tarball is a **complete, ready-to-install ROCm installation** bundled into a single `.tar.gz` file.
+
+**Example:** `therock-dist-linux-gfx90X-dcgpu-7.11.0rc1.tar.gz`
+
+**Key differences from CI artifacts:**
+
+| Aspect | CI Artifacts | Distribution Tarball |
+|---|---|---|
+| **Naming** | `blas_lib_gfx110X-all.tar.xz` | `therock-dist-linux-gfx90X-dcgpu-7.11.0rc1.tar.gz` |
+| **Granularity** | One file per component | Single file with everything |
+| **Count** | 260+ files | 1 file per GPU family |
+| **Purpose** | Modular downloads for packaging | Complete installation for end users |
+| **Created by** | CI build workflows | Release workflows |
+| **S3 bucket** | `therock-ci-artifacts` | `therock-{nightly\|dev\|prerelease}-tarball` |
+
+### When Are Distribution Tarballs Created?
+
+Distribution tarballs are created **AFTER** CI builds complete, in separate release workflows:
+
+```
+Timeline:
+
+1. CI Build (3-4 hours):
+   builds ROCm → creates 260+ .tar.xz files → uploads to therock-ci-artifacts
+
+2. Release Workflow (10-30 minutes later):
+   downloads .tar.xz from S3 → merges → creates therock-dist-*.tar.gz → uploads to therock-nightly-tarball
+```
+
+**Triggering workflows:**
+
+| Workflow | Purpose | Trigger | Output |
+|---|---|---|---|
+| `.github/workflows/release_portable_linux_packages.yml` | Nightly builds | Daily 4AM UTC | `therock-dist-linux-*-7.11.0a20260304.tar.gz` |
+| `.github/workflows/release_portable_linux_packages.yml` | Dev builds | Manual | `therock-dist-linux-*-7.11.0.dev0+abc123.tar.gz` |
+| `.github/workflows/release_portable_linux_packages.yml` | Prerelease | Manual | `therock-dist-linux-*-7.11.0rc1.tar.gz` |
+
+### How Distribution Tarballs Are Created
+
+**Step-by-step workflow:**
+
+```bash
+# 1. Download component artifacts from S3 (from earlier CI build)
+aws s3 sync s3://therock-ci-artifacts/22652981816-linux/ ./artifacts/
+
+# Result:
+artifacts/
+├── blas_lib_gfx110X-all.tar.xz
+├── blas_dev_gfx110X-all.tar.xz
+├── blas_test_gfx110X-all.tar.xz
+├── fft_lib_gfx110X-all.tar.xz
+├── ... (all 260+ component .tar.xz files)
+
+# 2. Extract ALL component .tar.xz files into unified tree
+cd build/dist/rocm/
+for f in ../../artifacts/*.tar.xz; do
+  tar xJf "$f"
+done
+
+# Result - merged /opt/rocm/ directory structure:
+build/dist/rocm/
+├── bin/
+│   ├── hipcc           # from core-hip_run_generic.tar.xz
+│   ├── rocm-smi        # from base_run_generic.tar.xz
+│   ├── rocblas-bench   # from blas_test_gfx110X-all.tar.xz
+│   └── ... (all executables merged)
+├── lib/
+│   ├── librocblas.so   # from blas_lib_gfx110X-all.tar.xz
+│   ├── libhip.so       # from core-hip_lib_generic.tar.xz
+│   └── ... (all libraries merged)
+├── include/
+│   ├── hip/            # from core-hip_dev_generic.tar.xz
+│   ├── rocblas/        # from blas_dev_gfx110X-all.tar.xz
+│   └── ... (all headers merged)
+└── share/
+    └── ... (documentation merged)
+
+# 3. Run therock-dist target to finalize merging
+cmake --build build --target therock-dist
+
+# 4. Create single distribution tarball
+cd build/dist/rocm/
+tar cfz therock-dist-linux-gfx110X-all-7.11.0rc1.tar.gz .
+
+# Result:
+therock-dist-linux-gfx110X-all-7.11.0rc1.tar.gz  (2.5 GB compressed)
+
+# 5. Upload to S3
+aws s3 cp therock-dist-linux-gfx110X-all-7.11.0rc1.tar.gz \
+  s3://therock-prerelease-tarball/
+```
+
+### What's Inside a Distribution Tarball?
+
+Everything needed for a complete ROCm installation:
+
+```bash
+# Download
+wget https://rocm.prereleases.amd.com/tarball/therock-dist-linux-gfx90X-dcgpu-7.11.0rc1.tar.gz
+
+# Extract
+tar xzf therock-dist-linux-gfx90X-dcgpu-7.11.0rc1.tar.gz
+
+# Result - Complete /opt/rocm/ ready to use:
+opt/rocm/
+├── bin/              # All executables (hipcc, rocgdb, rocm-smi, etc.)
+├── lib/              # All libraries (librocblas.so, libhip.so, etc.)
+├── include/          # All headers (hip/, rocblas/, rocfft/, etc.)
+├── share/            # Documentation, examples
+├── lib/cmake/        # CMake configs for all libraries
+└── ...
+
+# Use directly
+export PATH=/opt/rocm/bin:$PATH
+export LD_LIBRARY_PATH=/opt/rocm/lib:$LD_LIBRARY_PATH
+hipcc myapp.cpp -o myapp
+```
+
+### S3 Upload Destinations
+
+Distribution tarballs go to **different S3 buckets** than CI artifacts:
+
+```
+CI Artifacts:
+  s3://therock-ci-artifacts/22652981816-linux/
+  ├── blas_lib_gfx110X-all.tar.xz
+  ├── fft_lib_gfx110X-all.tar.xz
+  └── ... (260+ files, 7 day retention)
+
+Distribution Tarballs:
+  s3://therock-nightly-tarball/
+  └── therock-dist-linux-gfx110X-all-7.11.0a20260304.tar.gz  (30 day retention)
+
+  s3://therock-prerelease-tarball/
+  └── therock-dist-linux-gfx90X-dcgpu-7.11.0rc1.tar.gz  (permanent)
+
+  s3://therock-release-tarball/
+  └── therock-dist-linux-gfx90X-dcgpu-7.11.0.tar.gz  (permanent)
+```
+
+### Why Both CI Artifacts AND Distribution Tarballs?
+
+**CI artifacts** (per-component .tar.xz):
+- ✅ Modular downloads (Python packaging only needs `lib` components)
+- ✅ Efficient rebuilds (only changed components re-uploaded)
+- ✅ Flexible (different packages need different components)
+- ❌ Lots of files (260+)
+- ❌ Requires assembly
+
+**Distribution tarballs** (single .tar.gz):
+- ✅ One file, easy download
+- ✅ Complete installation
+- ✅ Simple extraction
+- ❌ Large file size (2-3 GB)
+- ❌ All-or-nothing (can't pick components)
+
+Different use cases require different formats!
+
+---
+
 ## Part 4: Stage 2A - Python Packaging
 
 ### Overview
