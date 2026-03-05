@@ -30,6 +30,7 @@
 - [Workflows Architecture](workflows_architecture.md)
 - [Workflow Call Chains](workflow_call_chains.md)
 - [Release and Nightly Builds](release_and_nightly_builds.md)
+- [CI Workflow Outputs Layout](workflow_outputs.md)
 - [GitHub Actions Debugging](github_actions_debugging.md)
 - [CI Behavior Manipulation](ci_behavior_manipulation.md)
 
