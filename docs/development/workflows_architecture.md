@@ -205,78 +205,137 @@ The CI Nightly workflow:
 
 TheRock CI uses three event categories that determine **which GPU families are built and tested**:
 
-| Event Type | When It Runs | GPU Families Included | Purpose |
-|------------|--------------|----------------------|---------|
-| **Presubmit** | Every pull request | gfx94x, gfx110x, gfx1151, gfx120x | Fast feedback for contributors |
-| **Postsubmit** | Every push to `main` | Presubmit families + gfx950 | Validate merged code on more hardware |
-| **Nightly** | 2 AM UTC daily | All families (presubmit + postsubmit + gfx906, gfx908, gfx90a, gfx101x, gfx103x, gfx1150, gfx1152, gfx1153) | Comprehensive coverage including older/experimental GPUs |
+> **Source:** [`build_tools/github_actions/new_amdgpu_family_matrix.py`](../../build_tools/github_actions/new_amdgpu_family_matrix.py) lines 62-76
+
+| Event Type | When It Runs | GPU Families Included | Test Type | Purpose |
+|------------|--------------|----------------------|-----------|---------|
+| **Presubmit** | Every pull request (`pull_request`) | `gfx94X-dcgpu`, `gfx110X-all`, `gfx1151`, `gfx120X-all` | Smoke (1 shard) | Fast feedback for contributors |
+| **Postsubmit** | Every push to `main` (`push`) | Presubmit families + `gfx950-dcgpu` | Smoke (1 shard) | Validate merged code on more hardware |
+| **Nightly** | 2 AM UTC daily (`schedule`) | All families: presubmit + postsubmit + `gfx90X-dcgpu`, `gfx101X-dgpu`, `gfx103X-dgpu`, `gfx1150`, `gfx1152`, `gfx1153` | Full (all shards) | Comprehensive coverage including older/experimental GPUs |
 
 **Why this matters:** Not all GPU hardware is available in large quantities. Presubmit runs on the most common GPUs for quick feedback. Nightly runs on everything to catch architecture-specific issues.
 
+**Test type determination** ([`configure_ci.py:637-678`](../../build_tools/github_actions/configure_ci.py)):
+- **Default:** `smoke` tests (1 shard per test, fast feedback)
+- **Nightly (schedule):** `full` tests (all shards, comprehensive coverage)
+- **Submodule changed:** `full` tests (source code changes require thorough testing)
+- **Test labels specified:** `full` tests (explicit request for specific tests)
+
 ## How the GPU Matrix Is Created
 
-> **Source file:** [`build_tools/github_actions/amdgpu_family_matrix.py`](../../build_tools/github_actions/amdgpu_family_matrix.py)
+> **Source file:** [`build_tools/github_actions/new_amdgpu_family_matrix.py`](../../build_tools/github_actions/new_amdgpu_family_matrix.py)
 
-This file is the **source of truth** for which GPUs exist and how to test them. It contains three dictionaries, one for each event type:
+This file is the **source of truth** for which GPUs exist and how to test them.
 
-**Presubmit families** (`amdgpu_family_info_matrix_presubmit`) - run on every PR:
+**Event-based grouping** (lines 62-76):
 
 ```python
-amdgpu_family_info_matrix_presubmit = {
-    "gfx94x": {
-        "linux": {
-            "test-runs-on": "linux-mi325-1gpu-ossci-rocm",    # Runner for tests
-            "test-runs-on-sandbox": "linux-mi325-8gpu-ossci-rocm-sandbox",  # ASAN runner
-            "test-runs-on-multi-gpu": "linux-mi325-8gpu-ossci-rocm",        # Multi-GPU tests
-            "benchmark-runs-on": "linux-mi325-8gpu-ossci-rocm",             # Benchmarks
-            "family": "gfx94X-dcgpu",                          # CMake target name
-            "fetch-gfx-targets": ["gfx942"],                   # Specific GPU chips
-            "build_variants": ["release", "asan", "tsan"],     # Build configurations
-        }
+amdgpu_family_predefined_groups = {
+    # Presubmit: runs on pull_request triggers
+    "amdgpu_presubmit": ["gfx94X-dcgpu", "gfx110X-all", "gfx1151", "gfx120X-all"],
+
+    # Postsubmit: runs on push triggers (commits to main)
+    "amdgpu_postsubmit": ["gfx950-dcgpu"],
+
+    # Nightly: runs on schedule triggers (2 AM UTC daily)
+    "amdgpu_nightly": [
+        "gfx90X-dcgpu",   # MI200 series (gfx90a)
+        "gfx101X-dgpu",   # RDNA1
+        "gfx103X-dgpu",   # RDNA2
+        "gfx1150",        # Strix Point variants
+        "gfx1152",
+        "gfx1153",
+    ],
+}
+```
+
+**Per-GPU configuration** (`amdgpu_family_info_matrix_all`, lines 105-511) defines build/test details for each GPU:
+
+```python
+amdgpu_family_info_matrix_all = {
+    "gfx94X": {  # MI325X family
+        "dcgpu": {
+            "linux": {
+                "build": {
+                    "build_variants": ["release", "asan"],  # Build configurations
+                },
+                "test": {
+                    "run_tests": True,
+                    "runs_on": {
+                        "test": "linux-mi325-1gpu-ossci-rocm-frac",      # Single-GPU tests
+                        "test-multi-gpu": "linux-mi325-8gpu-ossci-rocm", # Multi-GPU tests (RCCL)
+                        "benchmark": "linux-mi325-8gpu-ossci-rocm",      # Benchmarks
+                    },
+                    "fetch-gfx-targets": ["gfx942"],  # Specific GPU chips to fetch artifacts for
+                },
+                "release": {
+                    "push_on_success": True,                  # Push releases to S3
+                    "bypass_tests_for_releases": False,      # Don't skip tests
+                },
+            },
+            "windows": {
+                "build": {"build_variants": ["release"]},
+                "test": {"run_tests": False},  # Windows tests disabled for gfx94X
+                "release": {"push_on_success": False},
+            },
+        },
     },
-    "gfx110x": { ... },
-    "gfx1151": { ... },
-    "gfx120x": { ... },
-}
-```
-
-**Postsubmit families** (`amdgpu_family_info_matrix_postsubmit`) - added on pushes to main:
-
-```python
-amdgpu_family_info_matrix_postsubmit = {
-    "gfx950": {
-        "linux": {
-            "test-runs-on": "linux-mi355-1gpu-ossci-rocm",
-            "family": "gfx950-dcgpu",
-            "fetch-gfx-targets": ["gfx950"],
-            "build_variants": ["release", "asan", "tsan"],
-        }
+    "gfx950": {  # MI355X family
+        "dcgpu": {
+            "linux": {
+                "build": {"build_variants": ["release", "asan"]},
+                "test": {
+                    "run_tests": True,
+                    "runs_on": {"test": "linux-mi355-1gpu-ossci-rocm"},
+                    "fetch-gfx-targets": ["gfx950"],
+                },
+                "release": {"push_on_success": False},  # Not released yet
+            },
+        },
     },
+    "gfx110X": {  # RDNA3
+        "all": {
+            "linux": {
+                "test": {
+                    "run_tests": False,  # TODO(#2740): Re-enable once amdsmi test is fixed
+                    "sanity_check_only_for_family": True,  # Only run sanity checks
+                },
+                "release": {"bypass_tests_for_releases": True},
+            },
+            "windows": {
+                "test": {
+                    "run_tests": True,
+                    "runs_on": {"test": "windows-gfx110X-gpu-rocm"},
+                    "sanity_check_only_for_family": True,
+                },
+            },
+        },
+    },
+    # ... (more families: gfx1151, gfx1152, gfx1153, gfx120X, gfx90X, gfx101X, gfx103X)
 }
 ```
 
-**Nightly families** (`amdgpu_family_info_matrix_nightly`) - added on scheduled runs:
+**Build variants** (lines 78-102) define different build configurations:
 
-```python
-amdgpu_family_info_matrix_nightly = {
-    "gfx906": { ... },   # Older datacenter GPU
-    "gfx908": { ... },   # MI100
-    "gfx90a": { ... },   # MI200 series
-    "gfx101x": { ... },  # RDNA1
-    "gfx103x": { ... },  # RDNA2
-    "gfx1150": { ... },  # Strix Point
-    "gfx1152": { ... },
-    "gfx1153": { ... },
-}
-```
+| Variant | Platform | Preset | Purpose |
+|---------|----------|--------|---------|
+| `release` | Linux | `linux-release` | Standard optimized build |
+| `asan` | Linux | `linux-release-asan` | AddressSanitizer (memory error detection) |
+| `release` | Windows | `windows-release` | Standard Windows build |
 
 **How families are selected** ([`configure_ci.py`](../../build_tools/github_actions/configure_ci.py)):
 
 ```
-pull_request  → presubmit families only
-push to main  → presubmit + postsubmit families
-schedule      → presubmit + postsubmit + nightly families (ALL)
+pull_request  → presubmit families only (4 GPUs)
+push to main  → presubmit + postsubmit families (5 GPUs)
+schedule      → presubmit + postsubmit + nightly families (11 GPUs total)
 ```
+
+**Key flags:**
+- `run_tests: False` - Build only, skip tests (used for GPUs without test runners)
+- `sanity_check_only_for_family: True` - Run minimal validation tests only
+- `bypass_tests_for_releases: True` - Skip tests when creating releases (build-only)
+- `push_on_success: True` - Upload to S3 release buckets after successful build
 
 ## How the Test Matrix Is Created
 
@@ -284,17 +343,22 @@ schedule      → presubmit + postsubmit + nightly families (ALL)
 
 This file defines the `test_matrix` dictionary listing **what tests exist** and **how to run them**.
 
-**Test matrix structure:**
+### Test Matrix Structure
+
+Tests are defined with platform support, sharding, and artifact dependencies:
 
 ```python
 test_matrix = {
     "hip-tests": {
         "job_name": "hip-tests",
-        "fetch_artifact_args": "--tests",
+        "fetch_artifact_args": "--tests",                    # Artifacts needed
         "timeout_minutes": 120,
         "test_script": "python build_tools/github_actions/test_executable_scripts/test_hiptests.py",
-        "platform": ["linux", "windows"],
-        "total_shards": 4,  # Runs as 4 parallel jobs
+        "platform": ["linux", "windows"],                     # Supported platforms
+        "total_shards_dict": {                                # Shards per platform
+            "linux": 4,    # Linux: split into 4 parallel jobs
+            "windows": 4,  # Windows: split into 4 parallel jobs
+        },
     },
     "rocblas": {
         "job_name": "rocblas",
@@ -302,39 +366,110 @@ test_matrix = {
         "timeout_minutes": 15,
         "test_script": "python build_tools/github_actions/test_executable_scripts/test_rocblas.py",
         "platform": ["linux", "windows"],
-        "total_shards": 1,
+        "total_shards_dict": {
+            "linux": 1,    # No sharding needed (fast test)
+            "windows": 1,
+        },
+    },
+    "rocroller": {
+        "job_name": "rocroller",
+        "fetch_artifact_args": "--blas --tests",
+        "platform": ["linux"],
+        "total_shards_dict": {"linux": 5},  # 5-way split for Linux
+        "exclude_family": {                  # Architecture exclusions
+            "linux": ["gfx1150", "gfx1151", "gfx1152", "gfx1153"],  # Not supported on gfx115X
+        },
     },
     "rccl": {
         "job_name": "rccl",
+        "fetch_artifact_args": "--rccl --tests",
         "platform": ["linux"],
-        "total_shards": 1,
-        "multi_gpu": {"linux": ["gfx94X-dcgpu"]},  # Requires multi-GPU runner
+        "total_shards_dict": {"linux": 1},
+        "multi_gpu": {                        # Requires multi-GPU runners
+            "linux": ["gfx94X-dcgpu"]         # Only gfx94X has multi-GPU runners
+        },
     },
-    # ... 25+ more test definitions
+    # ... 30+ more test definitions (lines 38-451)
 }
 ```
 
-**Available tests:**
+### Available Tests (Grouped by Category)
 
-| Category | Tests |
-|----------|-------|
-| Core | hip-tests |
-| BLAS | rocblas, hipblas, hipblaslt, rocroller |
-| Solver | rocsolver, hipsolver |
-| Sparse | rocsparse, hipsparse, hipsparselt |
-| Primitives | rocprim, hipcub, rocthrust |
-| FFT | rocfft, hipfft |
-| Random | rocrand, hiprand |
-| ML/DNN | miopen, hipdnn, miopenprovider, hipblasltprovider |
-| Communication | rccl |
-| Tools | rocprofiler_systems, aqlprofile, rocrtst, rocr-debug-agent |
+**Current test matrix** (as of new_amdgpu_family_matrix.py integration):
 
-**Smoke vs Full tests:**
+| Category | Tests | Linux Shards | Windows Shards | Notes |
+|----------|-------|--------------|----------------|-------|
+| **Core** | hip-tests | 4 | 4 | HIP runtime tests |
+| **BLAS** | rocblas, hipblas, hipblaslt, rocroller | 1,1,6,5 | 1,1,1,5 | Matrix operations |
+| **Solver** | rocsolver, hipsolver | 1,1 | -,1 | Linear algebra |
+| **Sparse** | rocsparse, hipsparse, hipsparselt | 1,1,1 | 1,1,- | Sparse matrices |
+| **Primitives** | rocprim, hipcub, rocthrust | 2,1,1 | 2,1,1 | GPU primitives |
+| **FFT** | rocfft, hipfft | 1,2 | -,2 | Fast Fourier Transform |
+| **Random** | rocrand, hiprand | 1,1 | 1,1 | Random number generation |
+| **ML/DNN** | miopen, hipdnn, hipdnn-samples, miopenprovider, hipblasltprovider | 4,1,1,1,1 | 4,1,1,1,1 | Deep learning |
+| **Communication** | rccl | 1 | - | Multi-GPU communication (Linux only) |
+| **Profiling** | rocprofiler_systems, rocprofiler-compute, aqlprofile, rocrtst | 1,2,1,1 | - | Performance tools |
+| **Debug** | rocgdb, rocr-debug-agent | 1,1 | - | Debugging tools |
+| **Other** | rocwmma, libhipcxx_hipcc, libhipcxx_hiprtc, hipdnn_install | 4,1,1,1 | 2,-,-,1 | Specialized tests |
 
-| Test Type | When Used | Shards | Purpose |
-|-----------|-----------|--------|---------|
-| **Smoke** | PRs, quick validation | 1 shard only | Fast feedback (~minutes) |
-| **Full** | Nightly, submodule changes | All shards | Comprehensive coverage (~hours) |
+**Total:** 31 test suites, 58+ parallel test jobs (full runs)
+
+### Smoke vs Full Tests: How Sharding Works
+
+**Test type is determined by [`configure_ci.py:637-678`](../../build_tools/github_actions/configure_ci.py):**
+
+| Trigger | Test Type | Sharding Behavior | Example |
+|---------|-----------|-------------------|---------|
+| `pull_request` | `smoke` | 1 shard only (first shard) | hip-tests runs 1 job instead of 4 |
+| `push` | `smoke` | 1 shard only | Fast feedback on main branch |
+| `schedule` (nightly) | `full` | All shards | hip-tests runs all 4 shards in parallel |
+| Submodule changed | `full` | All shards | Source changes need thorough testing |
+| Test labels specified | `full` | All shards (for labeled tests only) | Explicit test request |
+
+**Implementation** ([`fetch_test_configurations.py:514-518`](../../build_tools/github_actions/fetch_test_configurations.py)):
+
+```python
+if test_type == "smoke":
+    job_config_data["total_shards"] = 1       # Override to 1 shard
+    job_config_data["shard_arr"] = [1]        # Run only first shard
+else:  # test_type == "full"
+    job_config_data["shard_arr"] = [1, 2, 3, 4]  # Run all shards
+```
+
+**Examples:**
+
+```
+hip-tests (total_shards_dict = {"linux": 4}):
+  - Smoke test:  Runs 1 job  (shard 1 of 4) → ~30 min
+  - Full test:   Runs 4 jobs (shards 1,2,3,4 in parallel) → ~30 min (4x throughput)
+
+rocroller (total_shards_dict = {"linux": 5}):
+  - Smoke test:  Runs 1 job  (shard 1 of 5) → ~12 min
+  - Full test:   Runs 5 jobs (shards 1,2,3,4,5 in parallel) → ~12 min (5x throughput)
+```
+
+**Why sharding matters:**
+- **Smoke tests:** Run fastest subset for quick PR feedback (1 shard = 1/Nth of tests)
+- **Full tests:** Run complete test suite across all shards for comprehensive coverage
+- **Parallelism:** Shards run simultaneously on separate runners, keeping wall-clock time constant
+
+### Multi-GPU Tests
+
+Some tests require multiple GPUs and use specialized runners:
+
+```python
+"multi_gpu": {
+    "linux": ["gfx94X-dcgpu"]  # Only gfx94X has multi-GPU runners
+}
+```
+
+**When multi-GPU is required** ([`fetch_test_configurations.py:520-547`](../../build_tools/github_actions/fetch_test_configurations.py)):
+- Uses `test-runs-on-multi-gpu` runner instead of `test-runs-on`
+- Example: `gfx94X`: `linux-mi325-8gpu-ossci-rocm` (8-GPU runner)
+- If architecture doesn't have multi-GPU runner, test is skipped
+
+**Tests requiring multi-GPU:**
+- `rccl` - Multi-GPU communication library (only runs on gfx94X-dcgpu)
 
 ## How the Benchmark Matrix Works
 
@@ -378,3 +513,4 @@ else:
 - [Workflow Call Chains](workflow_call_chains.md) - Quick reference for all workflow call hierarchies
 - [Release and Nightly Builds](release_and_nightly_builds.md) - Package versioning and S3 structure
 - [CI Behavior Manipulation](ci_behavior_manipulation.md) - PR labels and CI controls
+- [Test Filtering](test_filtering.md) - Test filter levels and gtest implementation (Note: Currently documents 4 levels [smoke, standard, nightly, full], but actual code only uses smoke/full as of new_amdgpu_family_matrix.py integration)
