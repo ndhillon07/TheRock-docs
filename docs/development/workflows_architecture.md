@@ -311,9 +311,56 @@ amdgpu_family_info_matrix_all = {
             },
         },
     },
-    # ... (more families: gfx1151, gfx1152, gfx1153, gfx120X, gfx90X, gfx101X, gfx103X)
+    "gfx120X": {  # RDNA4
+        "all": {
+            "linux": {
+                "test": {
+                    "run_tests": True,
+                    "runs_on": {"test": "linux-gfx120X-gpu-rocm"},
+                    "fetch-gfx-targets": ["gfx1200", "gfx1201"],  # Multiple specific GPU chips
+                    "sanity_check_only_for_family": True,
+                },
+            },
+        },
+    },
+    # ... (more families: gfx1151, gfx1152, gfx1153, gfx90X, gfx101X, gfx103X)
 }
 ```
+
+**GPU family naming convention** ([`cmake/therock_amdgpu_targets.cmake`](../../cmake/therock_amdgpu_targets.cmake)):
+
+GPU families use suffixes to indicate GPU categories:
+
+| Suffix | Full Name | Description | Examples |
+|--------|-----------|-------------|----------|
+| `-dcgpu` | Datacenter GPU | Server GPUs with matrix cores, ECC memory | `gfx94X-dcgpu` (MI300X), `gfx950-dcgpu` (MI350X) |
+| `-dgpu` | Discrete GPU | Desktop/workstation GPUs | `gfx110X-dgpu` (RX 7900), `gfx103X-dgpu` (RX 6800) |
+| `-igpu` | Integrated GPU | Laptop/APU integrated graphics | `gfx110X-igpu` (Radeon 780M), `gfx115X-igpu` (Strix Point) |
+| `-all` | All variants | Includes all GPU types in that architecture family | `gfx110X-all` (all RDNA3), `gfx120X-all` (all RDNA4) |
+
+**How families work** (lines 47-73):
+
+```cmake
+# Single specific GPU chip
+therock_add_amdgpu_target(gfx942 "MI300A/MI300X CDNA"
+    FAMILY dcgpu-all gfx94X-all gfx94X-dcgpu)
+    # This chip belongs to 3 families:
+    # - dcgpu-all (all datacenter GPUs)
+    # - gfx94X-all (all gfx94X variants)
+    # - gfx94X-dcgpu (only datacenter gfx94X)
+
+# Multiple chips in one family
+therock_add_amdgpu_target(gfx1100 "AMD RX 7900 XTX"
+    FAMILY dgpu-all gfx110X-all gfx110X-dgpu)
+therock_add_amdgpu_target(gfx1103 "AMD Radeon 780M Laptop iGPU"
+    FAMILY igpu-all gfx110X-all gfx110X-igpu)
+    # Both belong to gfx110X-all, but different GPU types
+```
+
+**Why this matters for CI:**
+- `gfx94X-dcgpu` → Tests only MI300 datacenter GPUs (most important for ROCm)
+- `gfx110X-all` → Tests all RDNA3 (desktop + laptop), broader hardware coverage
+- `gfx103X-dgpu` → Tests only discrete RDNA2, excludes integrated GPUs
 
 **Build variants** (lines 78-102) define different build configurations:
 
@@ -470,6 +517,130 @@ Some tests require multiple GPUs and use specialized runners:
 
 **Tests requiring multi-GPU:**
 - `rccl` - Multi-GPU communication library (only runs on gfx94X-dcgpu)
+
+### Event-Based Test Control: How Tests Are Selected
+
+**IMPORTANT:** Tests themselves do NOT have event-specific flags (no "only run on nightly" option in test_matrix). Event-based control happens through THREE mechanisms:
+
+#### 1. GPU Family Selection (Primary Control)
+
+Events control WHICH GPU families run, not which tests run:
+
+```python
+# From new_amdgpu_family_matrix.py:62-76
+amdgpu_family_predefined_groups = {
+    "amdgpu_presubmit": ["gfx94X-dcgpu", "gfx110X-all", "gfx1151", "gfx120X-all"],
+    "amdgpu_postsubmit": ["gfx950-dcgpu"],
+    "amdgpu_nightly": ["gfx90X-dcgpu", "gfx101X-dgpu", "gfx103X-dgpu", "gfx1150", "gfx1152", "gfx1153"],
+}
+```
+
+**Example flow:**
+```
+pull_request (presubmit):
+  ├─ gfx94X-dcgpu  → runs ALL tests (hip-tests, rocblas, miopen, rccl, etc.)
+  ├─ gfx110X-all   → runs ALL tests
+  ├─ gfx1151       → runs ALL tests
+  └─ gfx120X-all   → runs ALL tests
+
+schedule (nightly):
+  ├─ gfx94X-dcgpu  → runs ALL tests (same tests as presubmit)
+  ├─ gfx110X-all   → runs ALL tests
+  ├─ ... (all 11 GPU families)
+  └─ gfx1153       → runs ALL tests
+```
+
+#### 2. Test Type (Smoke vs Full)
+
+Events control HOW MUCH of each test runs (sharding):
+
+```python
+# From configure_ci.py:637-678
+if event == "schedule":
+    test_type = "full"    # All shards
+else:
+    test_type = "smoke"   # 1 shard only
+```
+
+**All tests run on all events, but with different completeness:**
+- Presubmit: hip-tests (1/4 shards), rocblas (1/1 shard), miopen (1/4 shards)
+- Nightly: hip-tests (4/4 shards), rocblas (1/1 shard), miopen (4/4 shards)
+
+#### 3. Benchmarks (Separate Matrix)
+
+Benchmarks are the ONLY tests with event-specific control - they use a completely separate matrix:
+
+```python
+# From fetch_test_configurations.py:464-473
+if is_benchmark_workflow:
+    selected_matrix = benchmark_matrix  # Separate matrix, only on nightly
+else:
+    selected_matrix = test_matrix       # Regular tests, all events
+```
+
+**Benchmark control:**
+- Only runs when `IS_BENCHMARK_WORKFLOW=true`
+- Set by nightly workflow, NOT by PR/push workflows
+- Completely separate from regular test_matrix
+
+#### 4. TEST_LABELS (Manual Override)
+
+Users can manually run specific tests via PR labels or workflow_dispatch:
+
+```python
+# From fetch_test_configurations.py:493-497
+if test_labels and key not in test_labels:
+    logging.info(f"Excluding job {job_name} since it's not in the test labels")
+    continue  # Skip this test
+```
+
+**Usage:**
+- Add PR label: `/test rocblas hipblas` → only runs rocblas and hipblas
+- Workflow dispatch: Set `LINUX_TEST_LABELS=["miopen"]` → only runs miopen
+- When test_labels is set, `test_type` becomes `"full"` (all shards)
+
+#### 5. Per-GPU Test Exclusions (exclude_family)
+
+Individual tests can be excluded for specific GPU families:
+
+```python
+# From fetch_test_configurations.py:63-88
+"rocroller": {
+    "exclude_family": {
+        "linux": ["gfx1150", "gfx1151", "gfx1152", "gfx1153"],  # Skip on gfx115X
+        "windows": ["gfx1150", "gfx1151", "gfx1152", "gfx1153"],
+    },
+},
+```
+
+**Implementation** (lines 482-491):
+```python
+if (
+    "exclude_family" in selected_matrix[key]
+    and platform in selected_matrix[key]["exclude_family"]
+    and amdgpu_families in selected_matrix[key]["exclude_family"][platform]
+):
+    logging.info(f"Excluding job {job_name} for platform {platform} and family {amdgpu_families}")
+    continue  # Skip this test for this GPU family
+```
+
+**Usage:** When a GPU family runs (e.g., gfx1151 on nightly), rocroller is skipped but all other tests run.
+
+**Summary: Event Control is Indirect**
+
+You **CANNOT** make hip-tests run only on postsubmit events. Event control works at the GPU/sharding level:
+
+1. ✅ **Per-event GPU selection:** Make a GPU family run only on certain events (via `amdgpu_family_predefined_groups`)
+2. ✅ **Per-event sharding:** Make ALL tests run with different completeness (via `test_type` smoke/full)
+3. ✅ **Per-GPU test exclusion:** Skip specific tests on specific GPU families (via `exclude_family`)
+4. ✅ **Separate benchmarks:** Create benchmark-only tests (via `benchmark_matrix`)
+5. ✅ **Manual test selection:** Run specific tests via labels (via `TEST_LABELS`)
+6. ❌ **Per-test event control:** Make specific regular tests skip certain events - **NOT SUPPORTED**
+
+**Example combinations:**
+- ✅ "Run rocroller only on nightly" → Put `gfx115X` in nightly group + add `exclude_family` for it
+- ✅ "Skip rocroller on gfx1151" → Use `exclude_family`
+- ❌ "Run hip-tests only on nightly" → Cannot do this (hip-tests runs on all events where GPUs are available)
 
 ## How the Benchmark Matrix Works
 
