@@ -3063,12 +3063,21 @@ tar -xJf /tmp/artifacts/solver_lib_gfx94X-dcgpu.tar.xz
 
 ```
 /tmp/staging/rocm_sdk_libraries_gfx94X_dcgpu/
-├── math-libs/BLAS/rocBLAS/stage/
-│   ├── bin/rocblas/library/TensileLibrary_gfx94X.dat
-│   └── lib/librocblas.so.4.0.0
-├── math-libs/FFT/rocFFT/stage/
-│   └── lib/librocfft.so.1.0.0
-└── ... (other math libs)
+└── math-libs/
+    ├── BLAS/
+    │   └── rocBLAS/
+    │       └── stage/
+    │           ├── bin/rocblas/library/TensileLibrary_gfx94X.dat
+    │           └── lib/librocblas.so.4.0.0
+    ├── FFT/
+    │   └── rocFFT/
+    │       └── stage/
+    │           └── lib/librocfft.so.1.0.0
+    ├── rand/
+    │   └── rocRAND/
+    │       └── stage/
+    │           └── lib/librocrand.so.1.0.0
+    └── ... (solver, sparse, rccl, miopen)
 ```
 
 **Step 3: Reorganize for Python**
