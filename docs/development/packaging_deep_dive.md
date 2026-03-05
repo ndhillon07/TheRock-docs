@@ -2826,11 +2826,19 @@ TheRock produces four types of Python packages:
 ```
 pip install rocm[libraries,devel]
    │
-   ├─ Installs: rocm (sdist)
-   ├─ rocm detects GPU: gfx94X
-   ├─ rocm adds dependency: rocm-sdk-core
-   ├─ rocm adds dependency: rocm-sdk-libraries-gfx94X-dcgpu
-   └─ rocm adds dependency: rocm-sdk-devel
+   ├─ Downloads & installs: rocm (sdist - source package)
+   │   │
+   │   ├─ Detects GPU: gfx94X-dcgpu
+   │   │
+   │   └─ Generates dependencies:
+   │       ├─ rocm-sdk-core
+   │       ├─ rocm-sdk-libraries-gfx94X-dcgpu
+   │       └─ rocm-sdk-devel
+   │
+   └─ Then installs dependencies (wheels):
+       ├─ rocm-sdk-core-7.11.0-py3-none-manylinux_2_28_x86_64.whl
+       ├─ rocm-sdk-libraries-gfx94X-dcgpu-7.11.0-py3-none-manylinux_2_28_x86_64.whl
+       └─ rocm-sdk-devel-7.11.0-py3-none-manylinux_2_28_x86_64.whl
 ```
 
 ### How GPU Detection Works During Installation
@@ -3051,7 +3059,7 @@ tar -xJf /tmp/artifacts/solver_lib_gfx94X-dcgpu.tar.xz
 # ... repeat for each math library (only lib component, not dev/test/dbg/doc)
 ```
 
-**Directory structure:**
+**Directory structure after extraction:**
 
 ```
 /tmp/staging/rocm_sdk_libraries_gfx94X_dcgpu/
@@ -3065,19 +3073,20 @@ tar -xJf /tmp/artifacts/solver_lib_gfx94X-dcgpu.tar.xz
 
 **Step 3: Reorganize for Python**
 
-Python packages expect a flat structure, not the nested component structure. So we reorganize:
+Python packages expect a flat structure, not the nested component structure. The build script reorganizes the extracted files:
 
 ```
-/tmp/staging/rocm_sdk_libraries_gfx94X_dcgpu/
-├── rocm_sdk_libraries/
+/tmp/staging/rocm_sdk_libraries_gfx94X_dcgpu/  (same directory, reorganized)
+├── math-libs/  (old structure - deleted after reorganization)
+├── rocm_sdk_libraries/  (new Python package structure)
 │   ├── __init__.py
 │   ├── bin/
 │   │   └── rocblas/
 │   │       └── library/
 │   │           └── TensileLibrary_gfx94X.dat
 │   └── lib/
-│       ├── librocblas.so.4.0.0
-│       ├── librocfft.so.1.0.0
+│       ├── librocblas.so.4.0.0  (moved from math-libs/BLAS/rocBLAS/stage/lib/)
+│       ├── librocfft.so.1.0.0   (moved from math-libs/FFT/rocFFT/stage/lib/)
 │       └── ... (all math libs)
 └── setup.py
 ```
