@@ -2102,9 +2102,10 @@ TheRock creates TWO different types of archive files with different naming patte
      - `blas_dev_gfx94X-dcgpu.tar.xz` (just the development files component)
      - `blas_test_gfx94X-dcgpu.tar.xz` (just the test binaries component)
    - **Created by:** `ninja artifacts` target (cmake/therock_artifacts.cmake)
+   - **Workflow:** `.github/workflows/build_portable_linux_artifacts.yml` (CI builds)
    - **Purpose:** Individual component artifacts uploaded to S3 after CI builds
    - **Split:** Each component gets its own `.tar.xz` file
-   - **Location:** `build/artifacts/` → uploaded to S3
+   - **Location:** `build/artifacts/` → uploaded to S3 (`therock-ci-artifacts` bucket)
 
 2. **Distribution Tarballs** (created in release workflows):
    - **Naming:** `therock-dist-linux-{family}-{version}.tar.gz`
