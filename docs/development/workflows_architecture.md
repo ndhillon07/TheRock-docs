@@ -21,7 +21,7 @@ This section walks through what happens when the **CI Nightly** workflow runs, f
 | [`.github/workflows/ci_nightly.yml`](../../.github/workflows/ci_nightly.yml) | Entry point workflow |
 | [`.github/workflows/setup.yml`](../../.github/workflows/setup.yml) | Matrix generation workflow |
 | [`.github/workflows/ci_linux.yml`](../../.github/workflows/ci_linux.yml) | Linux build/test orchestration |
-| [`build_tools/github_actions/amdgpu_family_matrix.py`](../../build_tools/github_actions/amdgpu_family_matrix.py) | GPU family definitions |
+| [`build_tools/github_actions/new_amdgpu_family_matrix.py`](../../build_tools/github_actions/new_amdgpu_family_matrix.py) | GPU family definitions |
 | [`build_tools/github_actions/configure_ci.py`](../../build_tools/github_actions/configure_ci.py) | Selects GPU families based on trigger |
 | [`build_tools/github_actions/fetch_test_configurations.py`](../../build_tools/github_actions/fetch_test_configurations.py) | Test definitions |
 | [`tests/extended_tests/benchmark/benchmark_test_matrix.py`](../../tests/extended_tests/benchmark/benchmark_test_matrix.py) | Benchmark definitions |
@@ -288,14 +288,15 @@ For each test, the test matrix controls:
 **Example from rocroller:**
 ```python
 "rocroller": {
-    "platform": ["linux"],  # Windows not supported
+    "platform": ["linux", "windows"],
     "exclude_family": {
-        "linux": ["gfx1150", "gfx1151", "gfx1152", "gfx1153"],  # gfx115X excluded
+        "linux": ["gfx1150", "gfx1151", "gfx1152", "gfx1153"],    # gfx115X excluded on Linux
+        "windows": ["gfx1150", "gfx1151", "gfx1152", "gfx1153"],  # gfx115X excluded on Windows
     },
 }
 ```
 
-Result: rocroller never runs on Windows (platform filter) or gfx115X Linux (exclude_family filter).
+Result: rocroller runs on both Linux and Windows, but excludes gfx115X family on both platforms.
 
 ### How the 3 Levels Work Together
 
@@ -353,11 +354,13 @@ amdgpu_family_predefined_groups = {
     "amdgpu_postsubmit": ["gfx950-dcgpu"],
 
     # Nightly: runs on schedule triggers (2 AM UTC daily)
+    # NOTE: Nightly ONLY defines additional families beyond presubmit/postsubmit
+    # Total nightly = presubmit + postsubmit + nightly (11 families total)
     "amdgpu_nightly": [
-        "gfx90X-dcgpu",   # MI200 series (gfx90a)
+        "gfx90X-dcgpu",   # MI100/MI200 series (gfx906, gfx908, gfx90a)
         "gfx101X-dgpu",   # RDNA1
         "gfx103X-dgpu",   # RDNA2
-        "gfx1150",        # Strix Point variants
+        "gfx1150",        # Strix Point variants (tested individually)
         "gfx1152",
         "gfx1153",
     ],

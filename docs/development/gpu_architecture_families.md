@@ -19,13 +19,13 @@ This document maps GPU chip IDs (like `gfx90a`) to their architecture families a
 | **gfx1030** | AMD RX 6800 / XT | Discrete | `dgpu-all`, `gfx103X-all`, `gfx103X-dgpu` |
 | **gfx1031** | AMD RX 6700 / XT | Discrete | `dgpu-all`, `gfx103X-all`, `gfx103X-dgpu` |
 | **gfx1032** | AMD RX 6600 | Discrete | `dgpu-all`, `gfx103X-all`, `gfx103X-dgpu` |
-| **gfx1033** | AMD Van Gogh | Integrated | `igpu-all`, `gfx103X-all`, `gfx103X-igpu` |
+| **gfx1033** | AMD Van Gogh iGPU | Integrated | `igpu-all`, `gfx103X-all`, `gfx103X-igpu` |
 | **gfx1034** | AMD RX 6500 XT | Discrete | `dgpu-all`, `gfx103X-all`, `gfx103X-dgpu` |
 | **gfx1035** | AMD Radeon 680M Laptop | Integrated | `igpu-all`, `gfx103X-all`, `gfx103X-igpu` |
 | **gfx1036** | AMD Raphael | Integrated | `igpu-all`, `gfx103X-all`, `gfx103X-igpu` |
 | **gfx1100** | AMD RX 7900 XTX | Discrete | `dgpu-all`, `gfx110X-all`, `gfx110X-dgpu` |
 | **gfx1101** | AMD RX 7800 XT | Discrete | `dgpu-all`, `gfx110X-all`, `gfx110X-dgpu` |
-| **gfx1102** | AMD RX 7700S / Framework 16 | Discrete | `dgpu-all`, `gfx110X-all`, `gfx110X-dgpu` |
+| **gfx1102** | AMD RX 7700S / Framework Laptop 16 | Discrete | `dgpu-all`, `gfx110X-all`, `gfx110X-dgpu` |
 | **gfx1103** | AMD Radeon 780M Laptop | Integrated | `igpu-all`, `gfx110X-all`, `gfx110X-igpu` |
 | **gfx1150** | AMD Strix Point | Integrated | `igpu-all`, `gfx115X-all`, `gfx115X-igpu` |
 | **gfx1151** | AMD Strix Halo | Integrated | `igpu-all`, `gfx115X-all`, `gfx115X-igpu` |
@@ -89,10 +89,17 @@ In CI workflows, GPUs are tested by family rather than individual chip IDs:
 | CI Entry | What Gets Tested | Specific Chips Included |
 |----------|------------------|-------------------------|
 | `gfx94X-dcgpu` | All datacenter gfx94X GPUs | gfx942 (MI300X) |
-| `gfx90X-dcgpu` | All datacenter gfx90X GPUs | gfx906, gfx908, gfx90a |
+| `gfx90X-dcgpu` | CI grouping for older datacenter GPUs* | gfx906, gfx908, gfx90a |
 | `gfx110X-all` | All RDNA3 GPUs (desktop + laptop) | gfx1100, gfx1101, gfx1102, gfx1103 |
 | `gfx103X-dgpu` | Only discrete RDNA2 GPUs | gfx1030, gfx1031, gfx1032, gfx1034 (excludes gfx1033/1035/1036 iGPUs) |
 | `gfx1151` | Only gfx1151 chip | gfx1151 (Strix Halo) |
+
+**\*Important:** `gfx90X-dcgpu` is a **CI-level grouping alias**, not a cmake family. The individual chips have separate cmake families:
+- gfx906 → `dgpu-all`, `gfx906-dgpu` (discrete GPU, not datacenter)
+- gfx908 → `dcgpu-all`, `gfx908-dcgpu`
+- gfx90a → `dcgpu-all`, `gfx90a-dcgpu`
+
+CI groups them together as "gfx90X-dcgpu" for testing convenience, but each chip belongs to its own family in cmake.
 
 **Why some GPUs are tested individually:**
 
