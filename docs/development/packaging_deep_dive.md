@@ -2833,6 +2833,156 @@ pip install rocm[libraries,devel]
    └─ rocm adds dependency: rocm-sdk-devel
 ```
 
+### How GPU Detection Works During Installation
+
+The `rocm` package is distributed as an **sdist (source distribution)**, not a pre-built wheel. This allows it to detect your GPU **at install time** and dynamically select the correct GPU-specific dependencies.
+
+**Step-by-step breakdown:**
+
+**1. Download the rocm sdist**
+
+When you run `pip install rocm[libraries,devel]`, pip downloads the source package (not a wheel):
+
+```bash
+# Downloaded from PyPI or S3
+rocm-7.11.0.tar.gz
+├── setup.py                              # Executed during installation
+└── src/rocm_sdk/_dist_info.py           # GPU detection logic
+```
+
+**2. Execute setup.py on your machine**
+
+Pip runs `setup.py` **on your local machine**, which executes GPU detection code:
+
+```python
+# setup.py (simplified)
+import dist_info
+
+# GPU DETECTION HAPPENS HERE
+TARGET_FAMILY = dist_info.determine_target_family()
+
+# Generate required dependencies
+INSTALL_REQUIRES = ["rocm-sdk-core==7.11.0"]  # Always required
+
+# Generate optional dependencies (from [libraries,devel])
+EXTRAS_REQUIRE = {
+    "libraries": [f"rocm-sdk-libraries-{TARGET_FAMILY}==7.11.0"],
+    "devel": ["rocm-sdk-devel==7.11.0"],
+    "profilers": ["rocm-sdk-profilers==7.11.0"],
+}
+```
+
+**3. GPU detection logic** (_dist_info.py)
+
+The `determine_target_family()` function tries these methods in order:
+
+```python
+def determine_target_family() -> str:
+    # 1. Check environment variable first
+    target_family = os.getenv("ROCM_SDK_TARGET_FAMILY")
+    if target_family:
+        return target_family  # User override
+
+    # 2. Auto-detect GPU using offload-arch tool
+    result = subprocess.check_output(["offload-arch"])
+    # Output example: "gfx942"
+
+    # 3. Convert to family name
+    # "gfx942" → "gfx94X-dcgpu"
+    arch_family = result[:-1] + "X"  # "gfx94X"
+    for suffix in ["-all", "-dgpu", "-igpu", "-dcgpu"]:
+        target_family = arch_family + suffix
+        if target_family in AVAILABLE_TARGET_FAMILIES:
+            return target_family
+
+    # 4. Fallback to default if no GPU detected
+    return DEFAULT_TARGET_FAMILY
+```
+
+**4. Package definitions** (_dist_info.py)
+
+```python
+ALL_PACKAGES = {
+    "meta": PackageEntry(
+        logical_name="meta",
+        dist_package_template="rocm",
+        required=True,  # Always installed
+    ),
+    "core": PackageEntry(
+        logical_name="core",
+        dist_package_template="rocm-sdk-core",
+        required=True,  # Always installed
+    ),
+    "libraries": PackageEntry(
+        logical_name="libraries",
+        dist_package_template="rocm-sdk-libraries-{target_family}",
+        required=False,  # Only with [libraries]
+    ),
+    "devel": PackageEntry(
+        logical_name="devel",
+        dist_package_template="rocm-sdk-devel",
+        required=False,  # Only with [devel]
+    ),
+}
+```
+
+**5. Pip installs dependencies**
+
+After setup.py finishes, pip installs the dependencies it generated:
+
+```bash
+# Always installed
+pip install rocm-sdk-core==7.11.0
+
+# Installed because of [libraries] extra
+pip install rocm-sdk-libraries-gfx94X-dcgpu==7.11.0
+
+# Installed because of [devel] extra
+pip install rocm-sdk-devel==7.11.0
+```
+
+**Complete installation flow:**
+
+```
+User runs: pip install rocm[libraries,devel]
+    ↓
+1. Pip downloads rocm-7.11.0.tar.gz (sdist)
+    ↓
+2. Pip runs setup.py on user's machine
+    ↓
+3. setup.py runs offload-arch → detects "gfx942"
+    ↓
+4. setup.py determines target_family = "gfx94X-dcgpu"
+    ↓
+5. setup.py generates dependencies:
+   - install_requires = ["rocm-sdk-core==7.11.0"]
+   - extras_require["libraries"] = ["rocm-sdk-libraries-gfx94X-dcgpu==7.11.0"]
+   - extras_require["devel"] = ["rocm-sdk-devel==7.11.0"]
+    ↓
+6. Pip downloads and installs:
+   - rocm-sdk-core (wheel)
+   - rocm-sdk-libraries-gfx94X-dcgpu (wheel)
+   - rocm-sdk-devel (wheel)
+```
+
+**Key insight:** The GPU-specific package name is determined **at install time** by running GPU detection code during `setup.py` execution, not by pip selecting from multiple pre-built wheels.
+
+**Manual override:**
+
+If GPU detection fails or you want to force a specific GPU family:
+
+```bash
+# Force installation for a specific GPU family
+ROCM_SDK_TARGET_FAMILY=gfx110X-all pip install rocm[libraries]
+
+# Or for systems without a GPU (uses default)
+pip install rocm[libraries]  # Falls back to DEFAULT_TARGET_FAMILY
+```
+
+**Source code references:**
+- `build_tools/packaging/python/templates/rocm/setup.py` - Installation script
+- `build_tools/packaging/python/templates/rocm/src/rocm_sdk/_dist_info.py` - GPU detection logic
+
 ### The Packaging Process
 
 **Script:** `build_tools/build_python_packages.py`
