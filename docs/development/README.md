@@ -27,6 +27,7 @@
 
 ### Infrastructure
 
+- [GPU Architecture Families](gpu_architecture_families.md) - Map GPU chip IDs to architecture families (gfx90a → dcgpu-all, gfx94X-dcgpu, etc.)
 - [Workflows Architecture](workflows_architecture.md)
 - [Workflow Call Chains](workflow_call_chains.md)
 - [Release and Nightly Builds](release_and_nightly_builds.md)
