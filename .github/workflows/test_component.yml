@@ -9,6 +9,9 @@ on:
       artifact_run_id:
         type: string
         default: ""
+      artifact_run_github_repo:
+        type: string
+        default: "ROCm/TheRock"
       artifact_group:
         type: string
       amdgpu_families:
@@ -112,6 +115,7 @@ jobs:
         uses: './.github/actions/setup_test_environment'
         with:
           ARTIFACT_RUN_ID: ${{ env.ARTIFACT_RUN_ID }}
+          ARTIFACT_RUN_GITHUB_REPO: ${{ inputs.artifact_run_github_repo }}
           # TODO(#3381): revert back to `inputs.artifact_group` once issue is resolved
           ARTIFACT_GROUP: ${{ inputs.amdgpu_families }}
           AMDGPU_TARGETS: ${{ inputs.amdgpu_targets }}
