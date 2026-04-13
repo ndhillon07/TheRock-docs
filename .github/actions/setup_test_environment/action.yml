@@ -80,6 +80,7 @@ runs:
         RELEASE_TYPE: ${{ inputs.RELEASE_TYPE }}
         GITHUB_TOKEN: ${{ github.token }}
         RETRY_THIS_STEP: "true"
+        STEP_NAME: "Download and Unpack Artifacts"
       run: |
         python ./build_tools/install_rocm_from_artifacts.py \
           --run-id=${ARTIFACT_RUN_ID} \
