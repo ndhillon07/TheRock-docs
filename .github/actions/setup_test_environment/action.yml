@@ -21,11 +21,14 @@ inputs:
   ARTIFACT_RUN_ID:
     description: (string) Run ID to download artifacts from (`env.ARTIFACT_RUN_ID` or a value like `19716407405`)
     required: true
+  ARTIFACT_RUN_GITHUB_REPO:                                                                             
+    description: (string) GitHub repository for artifact run in 'owner/repo' format                     
+    default: "ROCm/TheRock"   
   FETCH_ARTIFACT_ARGS:
     description: (string) Extra arguments to install_rocm_from_artifacts.py (e.g. `--blas --tests`)
-  RELEASE_TYPE:
-    description: 'Release type: "" for CI, or "dev", "nightly", "prerelease".'
-    default: ""
+  IS_PR_FROM_FORK:
+    description: (boolean) True if this workflow run is from a PR on a fork (often `github.event.pull_request.head.repo.fork`)
+    default: false
 
 runs:
   using: "composite"
@@ -72,12 +75,14 @@ runs:
         ARTIFACT_GROUP: ${{ inputs.ARTIFACT_GROUP }}
         AMDGPU_TARGETS: ${{ inputs.AMDGPU_TARGETS }}
         ARTIFACT_RUN_ID: ${{ inputs.ARTIFACT_RUN_ID }}
+        ARTIFACT_RUN_GITHUB_REPO: ${{ inputs.ARTIFACT_RUN_GITHUB_REPO }}
         FETCH_ARTIFACT_ARGS: ${{ inputs.FETCH_ARTIFACT_ARGS }}
-        RELEASE_TYPE: ${{ inputs.RELEASE_TYPE }}
         GITHUB_TOKEN: ${{ github.token }}
+        IS_PR_FROM_FORK: ${{ inputs.IS_PR_FROM_FORK }}
       run: |
         python ./build_tools/install_rocm_from_artifacts.py \
           --run-id=${ARTIFACT_RUN_ID} \
+          --run-github-repo=${ARTIFACT_RUN_GITHUB_REPO} \
           --artifact-group=${ARTIFACT_GROUP} \
           --amdgpu-targets=${AMDGPU_TARGETS} \
           --output-dir=${OUTPUT_ARTIFACTS_DIR} \
