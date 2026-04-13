@@ -21,8 +21,8 @@ inputs:
   ARTIFACT_RUN_ID:
     description: (string) Run ID to download artifacts from (`env.ARTIFACT_RUN_ID` or a value like `19716407405`)
     required: true
-  ARTIFACT_RUN_GITHUB_REPO:                                                                             
-    description: (string) GitHub repository for artifact run in 'owner/repo' format                     
+  ARTIFACT_RUN_GITHUB_REPO:
+    description: (string) GitHub repository for artifact run in 'owner/repo' format
     default: "ROCm/TheRock"
   FETCH_ARTIFACT_ARGS:
     description: (string) Extra arguments to install_rocm_from_artifacts.py (e.g. `--blas --tests`)
@@ -75,7 +75,7 @@ runs:
         ARTIFACT_GROUP: ${{ inputs.ARTIFACT_GROUP }}
         AMDGPU_TARGETS: ${{ inputs.AMDGPU_TARGETS }}
         ARTIFACT_RUN_ID: ${{ inputs.ARTIFACT_RUN_ID }}
-        ARTIFACT_RUN_GITHUB_REPO: ${{ inputs.ARTIFACT_RUN_GITHUB_REPO }}  
+        ARTIFACT_RUN_GITHUB_REPO: ${{ inputs.ARTIFACT_RUN_GITHUB_REPO }}
         FETCH_ARTIFACT_ARGS: ${{ inputs.FETCH_ARTIFACT_ARGS }}
         RELEASE_TYPE: ${{ inputs.RELEASE_TYPE }}
         GITHUB_TOKEN: ${{ github.token }}
