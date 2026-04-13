@@ -79,6 +79,7 @@ runs:
         FETCH_ARTIFACT_ARGS: ${{ inputs.FETCH_ARTIFACT_ARGS }}
         RELEASE_TYPE: ${{ inputs.RELEASE_TYPE }}
         GITHUB_TOKEN: ${{ github.token }}
+        RETRY_THIS_STEP: "true"
       run: |
         python ./build_tools/install_rocm_from_artifacts.py \
           --run-id=${ARTIFACT_RUN_ID} \
