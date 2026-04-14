@@ -123,6 +123,7 @@ jobs:
           VENV_DIR: ${{ env.VENV_DIR }}
           FETCH_ARTIFACT_ARGS: ${{ fromJSON(inputs.component).fetch_artifact_args }}
           RELEASE_TYPE: ${{ inputs.release_type }}
+          STEP_TIMEOUT_MINUTES: "15"
 
       # safe.directory must be set before Runner Health Status
       - name: Adjust git config
@@ -168,6 +169,7 @@ jobs:
           RETRY_THIS_STEP: "true"
           RETRY_COUNT: "1"
           RETRY_DELAY: "7"
+          STEP_TIMEOUT_MINUTES: ${{ fromJSON(inputs.component).timeout_minutes }}
           STEP_NAME: >-
             Test ${{ fromJSON(inputs.component).job_name }}
             (shard ${{ matrix.shard }}/${{ fromJSON(inputs.component).total_shards }})
