@@ -29,6 +29,9 @@ inputs:
   RELEASE_TYPE:
     description: 'Release type: "" for CI, or "dev", "nightly", "prerelease".'
     default: ""
+  STEP_TIMEOUT_MINUTES:
+    description: (string) Timeout in minutes for this step
+    default: ""
 
 runs:
   using: "composite"
