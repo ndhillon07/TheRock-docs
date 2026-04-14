@@ -113,6 +113,8 @@ jobs:
       - name: Run setup test environment workflow
         timeout-minutes: 15
         uses: './.github/actions/setup_test_environment'
+        env:
+          STEP_TIMEOUT_MINUTES: "15"
         with:
           ARTIFACT_RUN_ID: ${{ env.ARTIFACT_RUN_ID }}
           ARTIFACT_RUN_GITHUB_REPO: ${{ inputs.artifact_run_github_repo }}
@@ -123,7 +125,6 @@ jobs:
           VENV_DIR: ${{ env.VENV_DIR }}
           FETCH_ARTIFACT_ARGS: ${{ fromJSON(inputs.component).fetch_artifact_args }}
           RELEASE_TYPE: ${{ inputs.release_type }}
-          STEP_TIMEOUT_MINUTES: "15"
 
       # safe.directory must be set before Runner Health Status
       - name: Adjust git config
