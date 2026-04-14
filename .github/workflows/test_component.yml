@@ -111,10 +111,10 @@ jobs:
           repository: ${{ github.repository }}
 
       - name: Run setup test environment workflow
-        timeout-minutes: 60
+        timeout-minutes: 15
         uses: './.github/actions/setup_test_environment'
         env:
-          STEP_TIMEOUT_MINUTES: "60"
+          STEP_TIMEOUT_MINUTES: "15"
         with:
           ARTIFACT_RUN_ID: ${{ env.ARTIFACT_RUN_ID }}
           ARTIFACT_RUN_GITHUB_REPO: ${{ inputs.artifact_run_github_repo }}
