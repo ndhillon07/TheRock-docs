@@ -4,6 +4,122 @@ Configuration defines tests. Labels define runners. GitHub dispatches automatica
 
 ---
 
+## Complete Flow Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         CONFIGURATION FILES                              │
+└─────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────┐    ┌─────────────────────────────────┐
+│ fetch_test_configurations.py     │    │ amdgpu_family_matrix.py         │
+│ ─────────────────────────────    │    │ ───────────────────────         │
+│ test_matrix = {                  │    │ "gfx1100": {                    │
+│   "rocblas": {                   │    │   "test-runs-on-labels": [      │
+│     "total_shards": 6,           │    │     {"label": "pool-A",         │
+│     "timeout": 288,              │    │      "weight": 0.70},           │
+│     "test_script": "...",        │    │     {"label": "pool-B",         │
+│   }                              │    │      "weight": 0.30}            │
+│ }                                │    │   ]                             │
+│                                  │    │ }                               │
+│ Defines: WHAT to test            │    │ Defines: WHERE to run           │
+│   • Components                   │    │   • Runner labels               │
+│   • Parallelism (shards)         │    │   • Load balancing              │
+│   • Test scripts                 │    │   • GPU architectures           │
+└──────────────┬───────────────────┘    └──────────────┬──────────────────┘
+               │                                       │
+               │ Generates JSON                        │ Provides labels
+               ▼                                       ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    COMBINED CONFIGURATION (JSON)                         │
+│ ──────────────────────────────────────────────────────────────          │
+│ {                                                                        │
+│   "components": [                                                        │
+│     {                                                                    │
+│       "job_name": "rocblas",                                             │
+│       "shard_arr": [1, 2, 3, 4, 5, 6],        ← Matrix dimension        │
+│       "test_runner": "linux-gfx1100-pool-A",  ← runs-on label           │
+│       "timeout_minutes": 288,                                            │
+│       "test_script": "python test_runner.py"                             │
+│     }                                                                    │
+│   ]                                                                      │
+│ }                                                                        │
+└──────────────────────────────┬──────────────────────────────────────────┘
+                               │
+                               │ Fed to GitHub Actions
+                               ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                     GITHUB ACTIONS MATRIX EXPANSION                      │
+│ ───────────────────────────────────────────────────────────────         │
+│ strategy:                                                                │
+│   matrix:                                                                │
+│     shard: [1, 2, 3, 4, 5, 6]  ← From shard_arr                        │
+│                                                                          │
+│ GitHub creates 6 parallel jobs:                                          │
+│                                                                          │
+│ ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐        │
+│ │ Job: rocblas 1/6 │ │ Job: rocblas 2/6 │ │ Job: rocblas 3/6 │        │
+│ │ runs-on:         │ │ runs-on:         │ │ runs-on:         │        │
+│ │ pool-A           │ │ pool-A           │ │ pool-A           │        │
+│ └──────────────────┘ └──────────────────┘ └──────────────────┘        │
+│                                                                          │
+│ ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐        │
+│ │ Job: rocblas 4/6 │ │ Job: rocblas 5/6 │ │ Job: rocblas 6/6 │        │
+│ │ runs-on:         │ │ runs-on:         │ │ runs-on:         │        │
+│ │ pool-A           │ │ pool-A           │ │ pool-A           │        │
+│ └──────────────────┘ └──────────────────┘ └──────────────────┘        │
+└──────────────────────────────┬──────────────────────────────────────────┘
+                               │
+                               │ All jobs request: runs-on: pool-A
+                               ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    GITHUB SCHEDULER (AUTOMATIC)                          │
+│ ───────────────────────────────────────────────────────────────         │
+│ Matches jobs to available runners based on "runs-on" label              │
+│                                                                          │
+│ Queue:                          Available Runners:                       │
+│ • rocblas 1/6 (needs pool-A) ──→ Pool-A: [R1✓, R2✓, R3✓, R4, R5, ...]  │
+│ • rocblas 2/6 (needs pool-A) ──→         [R1 , R2 , R3 , R4✓, R5✓, ...] │
+│ • rocblas 3/6 (needs pool-A) ──→ Pool-B: [R1, R2, R3, ...]              │
+│ • rocblas 4/6 (needs pool-A)                                             │
+│ • rocblas 5/6 (needs pool-A)     ✓ = Currently running job              │
+│ • rocblas 6/6 (needs pool-A)                                             │
+│                                                                          │
+│ GitHub automatically:                                                    │
+│ • Finds idle runners with matching label                                │
+│ • Assigns jobs to runners (respects weights 70%/30%)                    │
+│ • Handles queuing when runners busy                                     │
+│ • Retries on failure                                                    │
+│ • NO MANUAL DISPATCH CODE                                               │
+└──────────────────────────────┬──────────────────────────────────────────┘
+                               │
+                               │ Jobs executing on runners
+                               ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    TEST EXECUTION (Your GPU Runners)                     │
+│ ───────────────────────────────────────────────────────────────         │
+│ Runner: linux-gfx1100-pool-A-runner-03                                  │
+│                                                                          │
+│ $ export TEST_COMPONENT=rocblas                                          │
+│ $ export SHARD_INDEX=2                                                   │
+│ $ export TOTAL_SHARDS=6                                                  │
+│ $ export AMDGPU_FAMILIES=gfx1100                                        │
+│ $ python test_runner.py                                                  │
+│                                                                          │
+│ [Test execution happens on GPU hardware]                                 │
+│ → Exit code 0 = Pass                                                     │
+│ → Exit code non-zero = Fail                                              │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Key Points:**
+1. **Config** decides: components, shards, scripts
+2. **AMDGPU matrix** provides: runner labels (runs-on)
+3. **Workflow** parallelizes: creates N jobs from shard array
+4. **GitHub** schedules: matches jobs to labeled runners automatically
+
+---
+
 ## Core Concept
 
 ```
