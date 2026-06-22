@@ -50,16 +50,95 @@ test_matrix = {
 }
 ```
 
-### 2. Generic Runner Executes
+### 2. Generic Runner Executes (For CTest-based tests)
 
 **File**: `build_tools/github_actions/test_executable_scripts/test_runner.py`
 
-One runner works for ALL components. It:
-- Reads `TEST_COMPONENT` env var
-- Discovers test labels via `ctest --print-labels`
-- Filters by category (`quick`, `standard`, etc.)
-- Filters by GPU (`ex_gpu_gfx1100`, etc.)
-- Runs tests with automatic sharding
+**"Generic" means one script works for ALL components without component-specific code.**
+
+Instead of writing custom code for each component, the runner **discovers** what's available:
+
+```
+Traditional Approach (Bad):          Generic Approach (Good):
+───────────────────────              ────────────────────────
+
+if component == "rocblas":           # No if/else! Works for any component
+    run rocblas tests                component = env.TEST_COMPONENT
+elif component == "miopen":          
+    run miopen tests                 # Ask CTest what tests exist
+elif component == "rocrand":         labels = ctest --print-labels
+    run rocrand tests                
+... (100 components = 100 if/else)  # Filter based on what we found
+                                     ctest -L category -L gpu_arch
+```
+
+**How it discovers tests:**
+
+```
+Step 1: Read environment
+  TEST_COMPONENT = "rocblas"      ← Which component to test
+  TEST_TYPE = "standard"          ← What category (quick/standard/etc)
+  AMDGPU_FAMILIES = "gfx1100"    ← What GPU
+
+Step 2: Ask CTest what tests exist
+  $ cd build/bin/rocblas
+  $ ctest --print-labels
+  
+  Output:
+    quick
+    standard
+    comprehensive
+    ex_gpu_gfx1100
+    ex_gpu_gfx110X
+    ex_gpu_gfx11X
+    quick_exclude
+    ...
+
+Step 3: Match GPU architecture (smart matching)
+  Current GPU: gfx1100
+  Available labels: [ex_gpu_gfx1100, ex_gpu_gfx110X, ex_gpu_gfx11X]
+  Best match: ex_gpu_gfx1100 (exact match!)
+
+Step 4: Build CTest command (automatic filtering)
+  ctest \
+    -L standard \              ← Category filter
+    -L ex_gpu_gfx1100 \       ← GPU filter
+    --tests-information 2,6   ← Shard 2 of 6 (automatic distribution)
+
+Step 5: Execute
+  → Only runs tests that have BOTH labels
+  → Tests auto-distribute across shards
+  → Exit code 0 = pass, non-zero = fail
+```
+
+**Why this is powerful:**
+
+✓ **No component-specific code** - Works for rocblas, miopen, rocrand, any component  
+✓ **Self-discovering** - Asks CTest what exists, doesn't hardcode  
+✓ **Label-based filtering** - Tests declare what they are, runner filters  
+✓ **Automatic sharding** - CTest distributes tests across shards  
+✓ **Easy to extend** - Add new component = zero runner changes  
+
+**Example: Adding a new component**
+
+Old way (component-specific):
+```python
+# Have to modify test_runner.py
+if component == "new-component":
+    run_new_component_tests()  # Custom code for each!
+```
+
+New way (generic):
+```python
+# test_runner.py never changes!
+# Just add labels to your tests in CMake:
+
+set_tests_properties(my_test PROPERTIES
+    LABELS "standard;ex_gpu_gfx1100"
+)
+
+# Runner discovers and runs automatically
+```
 
 ### 3. GitHub Creates Matrix Jobs
 
