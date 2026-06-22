@@ -52,7 +52,9 @@ test_matrix = {
 
 ### 2. Generic Runner Executes (For CTest-based tests)
 
-**File**: `build_tools/github_actions/test_executable_scripts/test_runner.py`
+**File**: `build_tools/github_actions/test_executable_scripts/test_runner.py`  
+**Runs On**: Your GPU runners (gfx1100-pool-A, gfx950-runner, etc.)  
+**Called By**: `test_component.yml` workflow step
 
 **"Generic" means one script works for ALL components without component-specific code.**
 
@@ -192,11 +194,38 @@ Total: 10 parallel jobs (automatic!)
 
 ---
 
-## Complete Flow Diagram
+## Complete Execution Flow
+
+### Where Things Run
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│ RUNNER 1: ubuntu-24.04 (GitHub-hosted, no GPU)                 │
+│                                                                 │
+│ Job: configure_test_matrix                                      │
+│ Executes: fetch_test_configurations.py                         │
+│ Purpose: Generate JSON configuration                           │
+│ Cost: Free (GitHub-provided)                                   │
+└────────────────────────────┬────────────────────────────────────┘
+                             │
+                             │ Outputs JSON
+                             ▼
+┌────────────────────────────────────────────────────────────────┐
+│ RUNNER 2: Your GPU Runners (gfx1100-pool-A, gfx950, etc.)     │
+│                                                                 │
+│ Job: test_components (matrix jobs)                             │
+│ Executes: test_component.yml → test_runner.py → ctest         │
+│ Purpose: Run actual tests on GPU hardware                      │
+│ Cost: Your infrastructure                                      │
+└────────────────────────────────────────────────────────────────┘
+```
+
+### Step-by-Step Flow
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│ STEP 1: Configuration (fetch_test_configurations.py)                │
+│ STEP 1: Configuration (ubuntu-24.04 runner)                         │
+│         File: fetch_test_configurations.py                          │
 └─────────────────────────────────────────────────────────────────────┘
 
 test_matrix = {
@@ -205,7 +234,7 @@ test_matrix = {
 }
 
                     │
-                    │ Script generates JSON
+                    │ Script generates JSON (on GitHub runner)
                     ▼
 
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -292,22 +321,29 @@ Runner Infrastructure:
                     ▼
 
 ┌─────────────────────────────────────────────────────────────────────┐
-│ STEP 5: Test Execution (test_runner.py)                             │
+│ STEP 5: Test Execution (On YOUR GPU runners - gfx1100-pool-A)       │
+│         File: test_runner.py (for CTest) or custom script           │
 └─────────────────────────────────────────────────────────────────────┘
 
-Each job runs:
+Runner: gfx1100-pool-A (your infrastructure)
+
+Step 1: test_component.yml workflow step runs:
   export TEST_COMPONENT=rocblas
   export SHARD_INDEX=1
   export TOTAL_SHARDS=6
   export AMDGPU_FAMILIES=gfx1100
   
-  python test_runner.py
+Step 2: Execute test script (from test_matrix config):
+  python test_runner.py    ← Runs on YOUR GPU runner
   
+Step 3: test_runner.py does:
   → Discovers labels: [standard, ex_gpu_gfx1100, ...]
   → Builds filter: ctest -L standard -L ex_gpu_gfx1100
   → Shards tests: --tests-information 1,6
-  → Runs tests
+  → Runs tests (using GPU on this runner)
   → Reports results
+
+All of Step 2-3 happens on YOUR GPU runner, not GitHub-hosted runner
 ```
 
 ---
@@ -949,14 +985,43 @@ GitHub Actions:
 
 ---
 
+## Execution Summary
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ What Runs Where?                                                  │
+├──────────────────────────────────────────────────────────────────┤
+│ File                              │ Runs On                       │
+├───────────────────────────────────┼──────────────────────────────┤
+│ fetch_test_configurations.py      │ ubuntu-24.04 (GitHub-hosted) │
+│                                   │ • No GPU needed               │
+│                                   │ • Just generates JSON         │
+│                                   │ • Fast & free                 │
+├───────────────────────────────────┼──────────────────────────────┤
+│ test_runner.py                    │ YOUR GPU runners              │
+│                                   │ • gfx1100-pool-A              │
+│                                   │ • gfx950-runner               │
+│                                   │ • Runs actual tests on GPU    │
+├───────────────────────────────────┼──────────────────────────────┤
+│ test_component.yml workflow       │ YOUR GPU runners              │
+│ (setup + test steps)              │ • Downloads artifacts         │
+│                                   │ • Runs test_runner.py         │
+│                                   │ • Collects results            │
+└───────────────────────────────────┴──────────────────────────────┘
+```
+
+**Key Point**: Configuration is cheap (GitHub runner), testing is expensive (your GPU runners).
+
+---
+
 ## Files Reference
 
-| File | Purpose |
-|------|---------|
-| `build_tools/github_actions/fetch_test_configurations.py` | Test configuration (WHAT to test) |
-| `build_tools/github_actions/amdgpu_family_matrix.py` | Runner pools & load balancing (WHERE to test) |
-| `build_tools/github_actions/test_executable_scripts/test_runner.py` | Generic test executor |
-| `.github/workflows/test_component.yml` | Reusable matrix workflow |
+| File | Purpose | Runs On |
+|------|---------|---------|
+| `build_tools/github_actions/fetch_test_configurations.py` | Test configuration (WHAT to test) | ubuntu-24.04 |
+| `build_tools/github_actions/amdgpu_family_matrix.py` | Runner pools & load balancing (WHERE to test) | ubuntu-24.04 |
+| `build_tools/github_actions/test_executable_scripts/test_runner.py` | Generic test executor | YOUR GPU runners |
+| `.github/workflows/test_component.yml` | Reusable matrix workflow | YOUR GPU runners |
 
 ---
 
