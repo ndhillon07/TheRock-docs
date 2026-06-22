@@ -1,306 +1,550 @@
-# Test Harness Documentation
+# Test Harness: Configuration-Based Generic Testing
 
-Documentation for TheRock's generic, extensible, configuration-driven test harness.
-
----
-
-## Quick Start
-
-New to the test harness? Start here:
-
-1. **[Test Harness Diagrams](test_harness_diagrams.md)** - Visual, presentation-ready diagrams
-2. **[Quick Reference](quick_reference.md)** - Common tasks and patterns
-3. **[Configuration-Driven Matrix](configuration_driven_matrix.md)** - How `fetch_test_configurations.py` works
-
-For comprehensive details, see [Test Harness Architecture](test_harness_architecture.md).
+A simple, configuration-driven test harness where you define tests once and GitHub Actions handles the rest.
 
 ---
 
-## Documentation Overview
-
-### 📊 [Test Harness Diagrams](test_harness_diagrams.md)
-
-**Best for: Presentations, high-level understanding**
-
-Easy-to-present visual diagrams showing:
-- Three-layer architecture (test definition, orchestration, infrastructure)
-- Label-based test selection
-- Parallel execution via sharding
-- Infrastructure independence
-- End-to-end flow
-- Key design benefits
-
-Perfect for explaining the system to stakeholders or new team members.
-
----
-
-### ⚙️ [Configuration-Driven Matrix](configuration_driven_matrix.md)
-
-**Best for: Understanding how tests are orchestrated**
-
-Deep dive into how `fetch_test_configurations.py` generates matrix jobs:
-- How `test_matrix` dictionary defines all tests
-- How `total_shards_dict` creates parallel jobs
-- How environment variables filter configurations
-- How GitHub Actions expands matrices
-- Real examples with rocBLAS, MIOpen, rocRAND
-- Visualizing configuration → matrix → jobs flow
-
-**Emphasizes:**
-- Configuration is data, not code
-- Matrix expansion is automatic
-- One config controls multiple dimensions
-- No manual job dispatching needed
-
----
-
-### 📖 [Test Harness Architecture](test_harness_architecture.md)
-
-**Best for: Comprehensive reference, deep understanding**
-
-Complete architecture documentation:
-- Design principles and goals
-- All architecture diagrams (detailed versions)
-- Component responsibilities
-- How to add new components (step-by-step)
-- Special cases and advanced features
-
-Use this when you need the full picture or are implementing something new.
-
----
-
-### ⚡ [Quick Reference](quick_reference.md)
-
-**Best for: Day-to-day development tasks**
-
-Practical guide for common tasks:
-- Adding tests to existing components
-- Adding new components
-- Label naming conventions
-- Debugging tests
-- Adjusting sharding
-- Component-specific overrides
-- Environment variables reference
-- Common patterns
-- Troubleshooting
-
-Keep this open while working with tests!
-
----
-
-## Key Concepts
-
-### Generic & Extensible
-
-- **One test runner** works for all components
-- Components follow a **CTest labeling contract**
-- Add components via **configuration only** (no code changes)
-
-### Label-Based Configuration
-
-- **Categories**: `quick`, `standard`, `comprehensive`, `full`
-- **GPU architectures**: `ex_gpu_gfx1151`, `ex_gpu_gfx11X`
-- **Exclusions**: `quick_exclude`, `standard_exclude`
-- Tests selected automatically based on labels
-
-### Configuration-Driven Matrix
-
-- `test_matrix` dictionary defines all components
-- `fetch_test_configurations.py` generates JSON matrix
-- GitHub Actions expands matrix into parallel jobs
-- **One config** → **Multiple components** → **Multiple shards per component** → **All running in parallel**
-
-### Infrastructure Independence
-
-- Runner pools managed separately by infra teams
-- Test matrix specifies requirements, not specific runners
-- GitHub Actions scheduler handles job allocation
-- Weighted load balancing across runner pools
-
-### Developer Experience
-
-- Write tests in component repository
-- Add CTest labels following convention
-- Configure in `test_matrix` dictionary
-- **No infrastructure knowledge required**
-- **No manual job dispatching**
-
----
-
-## Architecture at a Glance
+## Core Concept
 
 ```
-Developer                  TheRock                   Infrastructure
-   │                          │                            │
-   │ Write tests              │                            │
-   │ + labels                 │                            │
-   ├─────────────────────────>│                            │
-   │                          │                            │
-   │                     Configure                         │
-   │                     test_matrix                       │
-   │                          │                            │
-   │                   Generate matrix                     │
-   │                          │                            │
-   │                   ┌──────▼──────┐                    │
-   │                   │GitHub Actions│                    │
-   │                   │  Scheduler   │                    │
-   │                   └──────┬──────┘                    │
-   │                          │                            │
-   │                          │  Match jobs to runners     │
-   │                          ├───────────────────────────>│
-   │                          │                            │
-   │                          │                    Manage runners
-   │                          │                    Add/remove pools
-   │                          │                    Adjust capacity
-   │<─────────────────────────┤                            │
-   │  Test results            │                            │
+┌─────────────────────────────────────────────────────────────┐
+│  You Write                GitHub Actions Does               │
+│  ─────────                ──────────────────                │
+│  • Configuration          • Creates parallel jobs           │
+│  • Test labels            • Dispatches to runners           │
+│                           • Collects results                │
+│                                                             │
+│  No job dispatch code needed!                               │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-**Key Points:**
-- Each layer is **independent**
-- Configuration **drives** job creation
-- GitHub Actions **automates** job dispatch
-- Infrastructure teams **scale** independently
+---
+
+## How It Works
+
+### 1. Define Configuration (Once)
+
+**File**: `build_tools/github_actions/fetch_test_configurations.py`
+
+```python
+test_matrix = {
+    "rocblas": {
+        "job_name": "rocblas",
+        "timeout_minutes": 288,
+        "test_script": "python .../test_runner.py",
+        "platform": ["linux", "windows"],
+        "total_shards_dict": {
+            "linux": 6,      # ← Creates 6 parallel jobs
+            "windows": 6,
+        },
+    },
+    "miopen": {
+        "job_name": "miopen",
+        "timeout_minutes": 120,
+        "test_script": "python .../test_runner.py",
+        "platform": ["linux"],
+        "total_shards_dict": {
+            "linux": 4,      # ← Creates 4 parallel jobs
+        },
+    },
+}
+```
+
+### 2. Generic Runner Executes
+
+**File**: `build_tools/github_actions/test_executable_scripts/test_runner.py`
+
+One runner works for ALL components. It:
+- Reads `TEST_COMPONENT` env var
+- Discovers test labels via `ctest --print-labels`
+- Filters by category (`quick`, `standard`, etc.)
+- Filters by GPU (`ex_gpu_gfx1100`, etc.)
+- Runs tests with automatic sharding
+
+### 3. GitHub Creates Matrix Jobs
+
+```
+Configuration:                    GitHub Creates:
+─────────────                     ───────────────
+rocblas:                          • rocblas (shard 1/6)
+  total_shards: 6        ──────>  • rocblas (shard 2/6)
+                                  • rocblas (shard 3/6)
+                                  • rocblas (shard 4/6)
+                                  • rocblas (shard 5/6)
+                                  • rocblas (shard 6/6)
+
+miopen:                           • miopen (shard 1/4)
+  total_shards: 4        ──────>  • miopen (shard 2/4)
+                                  • miopen (shard 3/4)
+                                  • miopen (shard 4/4)
+
+Total: 10 parallel jobs (automatic!)
+```
+
+### 4. Runner Pools & Dispatch
+
+**File**: `tests/amdgpu_family_matrix.py`
+
+```python
+"gfx1100": {
+    "linux": {
+        "test-runs-on-labels": [
+            {"label": "gfx1100-pool-A", "weight": 70},  # 70% of jobs
+            {"label": "gfx1100-pool-B", "weight": 30},  # 30% of jobs
+        ]
+    }
+}
+```
+
+**Infrastructure team provisions runners**:
+```bash
+# Pool A: 12 runners
+./config.sh --labels linux,gpu,gfx1100-pool-A
+
+# Pool B: 5 runners
+./config.sh --labels linux,gpu,gfx1100-pool-B
+```
+
+**GitHub automatically dispatches**:
+- Job needs: `runs-on: gfx1100-pool-A`
+- GitHub finds idle runner with that label
+- Job executes
+- No manual dispatch needed
 
 ---
 
-## Common Workflows
+## Complete Flow Diagram
 
-### Adding a Test
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│ STEP 1: Configuration (fetch_test_configurations.py)                │
+└─────────────────────────────────────────────────────────────────────┘
 
-1. Write test in component CMake
-2. Add labels: `set_tests_properties(test PROPERTIES LABELS "standard;ex_gpu_gfx1100")`
-3. Test locally: `ctest -L standard -L ex_gpu_gfx1100`
-4. Push → Tests run automatically in CI
+test_matrix = {
+    "rocblas": {"total_shards_dict": {"linux": 6}},
+    "miopen":  {"total_shards_dict": {"linux": 4}},
+}
 
-### Adding a Component
+                    │
+                    │ Script generates JSON
+                    ▼
 
-1. Add CTest labels to component tests
-2. Add entry to `test_matrix` in `fetch_test_configurations.py`
-3. Test locally with `test_runner.py`
-4. Push → Component appears in test matrix
+┌─────────────────────────────────────────────────────────────────────┐
+│ STEP 2: Matrix Generation                                           │
+└─────────────────────────────────────────────────────────────────────┘
 
-### Adjusting Parallelism
+Output:
+{
+  "components": [
+    {
+      "job_name": "rocblas",
+      "shard_arr": [1, 2, 3, 4, 5, 6],  ← Array for matrix
+      "test_runner": "gfx1100-pool-A"
+    },
+    {
+      "job_name": "miopen",
+      "shard_arr": [1, 2, 3, 4],
+      "test_runner": "gfx1100-pool-B"
+    }
+  ]
+}
 
-1. Edit `total_shards_dict` in `test_matrix`
-2. Increase number = more parallel jobs (faster, needs more runners)
-3. Decrease number = fewer parallel jobs (slower, fewer runners)
-4. No other changes needed
+                    │
+                    │ GitHub Actions reads JSON
+                    ▼
 
-### Scaling Infrastructure
+┌─────────────────────────────────────────────────────────────────────┐
+│ STEP 3: GitHub Actions Matrix Expansion                             │
+└─────────────────────────────────────────────────────────────────────┘
 
-1. Infra team provisions new runners
-2. Add runners to pool with appropriate labels
-3. Adjust weight in `amdgpu_family_matrix.py`
-4. Jobs automatically distribute to new runners
-5. No test configuration changes needed
+strategy:
+  matrix:
+    shard: ${{ fromJSON(inputs.component).shard_arr }}
+
+Creates 10 jobs:
+  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+  │ rocblas 1/6  │  │ rocblas 2/6  │  │ rocblas 3/6  │
+  │ runs-on:     │  │ runs-on:     │  │ runs-on:     │
+  │ pool-A       │  │ pool-A       │  │ pool-A       │
+  └──────────────┘  └──────────────┘  └──────────────┘
+  ... (rocblas 4/6, 5/6, 6/6)
+
+  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+  │ miopen 1/4   │  │ miopen 2/4   │  │ miopen 3/4   │
+  │ runs-on:     │  │ runs-on:     │  │ runs-on:     │
+  │ pool-B       │  │ pool-B       │  │ pool-B       │
+  └──────────────┘  └──────────────┘  └──────────────┘
+  ... (miopen 4/4)
+
+                    │
+                    │ GitHub scheduler
+                    ▼
+
+┌─────────────────────────────────────────────────────────────────────┐
+│ STEP 4: Job Dispatch (Automatic by GitHub)                          │
+└─────────────────────────────────────────────────────────────────────┘
+
+Runner Infrastructure:
+
+┌────────────────────────────────────┐
+│ Pool A (label: gfx1100-pool-A)     │
+│ ┌────────┐ ┌────────┐ ┌────────┐  │
+│ │Runner 1│ │Runner 2│ │Runner 3│  │
+│ └────────┘ └────────┘ └────────┘  │
+│ ... (12 total runners)             │
+└────────────────────────────────────┘
+      ▲
+      │ GitHub matches: "runs-on: gfx1100-pool-A"
+      │
+
+┌────────────────────────────────────┐
+│ Pool B (label: gfx1100-pool-B)     │
+│ ┌────────┐ ┌────────┐             │
+│ │Runner 1│ │Runner 2│             │
+│ └────────┘ └────────┘             │
+│ ... (5 total runners)              │
+└────────────────────────────────────┘
+      ▲
+      │ GitHub matches: "runs-on: gfx1100-pool-B"
+      │
+
+                    │
+                    │ Jobs execute
+                    ▼
+
+┌─────────────────────────────────────────────────────────────────────┐
+│ STEP 5: Test Execution (test_runner.py)                             │
+└─────────────────────────────────────────────────────────────────────┘
+
+Each job runs:
+  export TEST_COMPONENT=rocblas
+  export SHARD_INDEX=1
+  export TOTAL_SHARDS=6
+  export AMDGPU_FAMILIES=gfx1100
+  
+  python test_runner.py
+  
+  → Discovers labels: [standard, ex_gpu_gfx1100, ...]
+  → Builds filter: ctest -L standard -L ex_gpu_gfx1100
+  → Shards tests: --tests-information 1,6
+  → Runs tests
+  → Reports results
+```
 
 ---
 
-## Documentation for Different Roles
+## Adding a New Component
 
-### Test Authors (Component Developers)
+### Step 1: Write Tests with Labels
 
-Start with:
-- [Quick Reference - Adding Tests](quick_reference.md#adding-tests-to-an-existing-component)
-- [Quick Reference - Label Conventions](quick_reference.md#label-naming-conventions)
-- [Diagrams - Label-Based Selection](test_harness_diagrams.md#2-label-based-test-selection-the-magic)
+**In your component's CMakeLists.txt**:
 
-### Integration Engineers (TheRock Team)
+```cmake
+add_test(NAME my_test COMMAND my_test_exe)
+set_tests_properties(my_test PROPERTIES
+    LABELS "standard;ex_gpu_gfx1100"
+)
+```
 
-Start with:
-- [Quick Reference - Adding a Component](quick_reference.md#adding-a-new-component)
-- [Configuration-Driven Matrix](configuration_driven_matrix.md)
-- [Architecture - Component Responsibilities](test_harness_architecture.md#component-responsibilities)
+**Label conventions**:
+- Category: `quick`, `standard`, `comprehensive`, `full`
+- GPU: `ex_gpu_gfx1100`, `ex_gpu_gfx11X` (wildcard), etc.
 
-### Infrastructure Teams
+### Step 2: Add to Configuration
 
-Start with:
-- [Diagrams - Infrastructure Independence](test_harness_diagrams.md#4-infrastructure-independence)
-- [Architecture - Infrastructure Layer](test_harness_architecture.md#architecture-diagrams)
-- [Configuration-Driven Matrix - Filtering](configuration_driven_matrix.md#configuration-driven-filtering)
+**In `fetch_test_configurations.py`**:
 
-### Stakeholders / Presenters
+```python
+test_matrix = {
+    # ... existing components ...
+    
+    "my-component": {
+        "job_name": "my-component",
+        "fetch_artifact_args": "--my-component --tests",
+        "timeout_minutes": 60,
+        "test_script": f"python {_get_script_path('test_runner.py')}",
+        "platform": ["linux", "windows"],
+        "total_shards_dict": {
+            "linux": 2,    # 2 parallel jobs on Linux
+            "windows": 1,   # 1 job on Windows
+        },
+    },
+}
+```
 
-Start with:
-- [Test Harness Diagrams](test_harness_diagrams.md) - All diagrams are presentation-ready
-- [Diagrams - Presentation One-Pager](test_harness_diagrams.md#7-presentation-one-pager)
-- [Architecture - Design Principles](test_harness_architecture.md#design-principles)
+**That's it!** Generic runner handles the rest.
+
+### Step 3: (Optional) Map Directory Name
+
+**If job name ≠ directory name, in `test_runner.py`**:
+
+```python
+COMPONENT_DIR_MAPPING = {
+    "my-component": "MyComponentDir",
+}
+```
 
 ---
 
-## Key Files Reference
+## Runner Pool Management
+
+### Infrastructure Team Creates Pools
+
+```bash
+# Create runners with labels
+./config.sh \
+  --url https://github.com/ROCm/TheRock \
+  --labels linux,gpu,gfx1100-pool-A \
+  --name runner-01
+
+./config.sh \
+  --url https://github.com/ROCm/TheRock \
+  --labels linux,gpu,gfx1100-pool-B \
+  --name runner-02
+```
+
+### Configure Load Balancing
+
+**In `tests/amdgpu_family_matrix.py`**:
+
+```python
+"gfx1100": {
+    "linux": {
+        "test-runs-on-labels": [
+            {"label": "gfx1100-pool-A", "weight": 70},
+            {"label": "gfx1100-pool-B", "weight": 30},
+        ]
+    }
+}
+```
+
+- 70% of jobs → Pool A
+- 30% of jobs → Pool B
+- Adjust weights to balance load
+- Add/remove pools anytime
+
+### GitHub Handles Dispatch
+
+```
+Job Request:                Runner Selection:
+────────────                ─────────────────
+runs-on: gfx1100-pool-A  →  GitHub finds idle runner
+                            with label "gfx1100-pool-A"
+                         →  Assigns job to runner
+                         →  Runner executes
+                         →  Runner becomes idle again
+```
+
+**No manual dispatch code. No job assignment logic. Automatic.**
+
+---
+
+## Real Example: rocBLAS
+
+### Configuration
+
+```python
+test_matrix = {
+    "rocblas": {
+        "job_name": "rocblas",
+        "fetch_artifact_args": "--blas --tests",
+        "timeout_minutes": 288,
+        "test_script": f"python {_get_script_path('test_runner.py')}",
+        "platform": ["linux", "windows"],
+        "total_shards_dict": {
+            "linux": 6,
+            "windows": 6,
+        },
+    },
+}
+```
+
+### Environment
+
+```bash
+PROJECTS_TO_TEST="rocblas"
+AMDGPU_FAMILIES="gfx1100"
+TEST_TYPE="standard"
+```
+
+### Generated Matrix
+
+```json
+{
+  "job_name": "rocblas",
+  "total_shards": 6,
+  "shard_arr": [1, 2, 3, 4, 5, 6],
+  "test_runner": "gfx1100-pool-A"
+}
+```
+
+### GitHub Creates Jobs
+
+```yaml
+# Job 1
+name: Test rocblas (shard 1/6) (gfx1100)
+runs-on: gfx1100-pool-A
+env:
+  TEST_COMPONENT: rocblas
+  SHARD_INDEX: 1
+  TOTAL_SHARDS: 6
+
+# Job 2
+name: Test rocblas (shard 2/6) (gfx1100)
+runs-on: gfx1100-pool-A
+env:
+  TEST_COMPONENT: rocblas
+  SHARD_INDEX: 2
+  TOTAL_SHARDS: 6
+
+# ... jobs 3, 4, 5, 6
+```
+
+### Execution
+
+Each job:
+1. Downloads artifacts
+2. Runs `test_runner.py`
+3. Discovers labels: `[standard, ex_gpu_gfx1100, ...]`
+4. Filters: `ctest -L standard -L ex_gpu_gfx1100 --tests-information N,6`
+5. Tests auto-shard by index
+6. Reports results
+
+**Result**: 6x speedup from parallel execution!
+
+---
+
+## Key Configuration Fields
+
+### total_shards_dict
+
+Controls parallelism:
+
+```python
+"total_shards_dict": {
+    "linux": 6,    # More shards = faster (needs more runners)
+    "windows": 2,  # Fewer shards = slower (fewer runners needed)
+}
+```
+
+### platform
+
+Which OS to run on:
+
+```python
+"platform": ["linux", "windows"]  # Both
+"platform": ["linux"]             # Linux only
+```
+
+### timeout_minutes
+
+Per-job timeout:
+
+```python
+"timeout_minutes": 288,  # 4.8 hours per shard
+```
+
+### exclude_family
+
+Skip specific GPUs:
+
+```python
+"exclude_family": {
+    "linux": ["gfx1150", "gfx1151"],
+}
+```
+
+### multi_gpu
+
+Require multi-GPU runners:
+
+```python
+"multi_gpu": {
+    "linux": ["gfx94X-dcgpu", "gfx950-dcgpu"],
+}
+```
+
+---
+
+## Quick Reference
+
+### Add component
+1. Add test labels in CMake
+2. Add entry to `test_matrix`
+3. Done!
+
+### Adjust parallelism
+1. Change `total_shards_dict` value
+2. Higher = more parallel jobs
+3. Done!
+
+### Add runner pool
+1. Infrastructure provisions runners with labels
+2. Add to `test-runs-on-labels` with weight
+3. GitHub auto-dispatches
+4. Done!
+
+### Debug
+```bash
+# See what tests would run
+export TEST_COMPONENT=rocblas
+export AMDGPU_FAMILIES=gfx1100
+cd build/dist/rocm/bin/rocblas
+ctest -L standard -L ex_gpu_gfx1100 -N
+
+# See available labels
+ctest --print-labels
+```
+
+---
+
+## Why This Works
+
+### ✓ Configuration-Driven
+- `test_matrix` is pure data
+- No procedural job creation
+- Easy to modify
+
+### ✓ Generic Runner
+- One runner for all components
+- Label-based filtering
+- Automatic discovery
+
+### ✓ Automatic Parallelism
+- `total_shards: 6` → 6 jobs
+- Linear speedup
+- No sharding code
+
+### ✓ Independent Infrastructure
+- Test authors: Add tests + labels
+- Infra teams: Manage runner pools
+- GitHub: Handles dispatch
+- No coordination needed
+
+### ✓ Zero Manual Dispatch
+- No job assignment code
+- No runner selection logic
+- Labels + GitHub = automatic
+
+---
+
+## Files Reference
 
 | File | Purpose |
 |------|---------|
-| `build_tools/github_actions/fetch_test_configurations.py` | Generates test matrix from configuration |
-| `build_tools/github_actions/test_executable_scripts/test_runner.py` | Generic test runner (label-based) |
-| `.github/workflows/test_component.yml` | Reusable test workflow (matrix jobs) |
-| `tests/amdgpu_family_matrix.py` | Runner pool configuration & weights |
+| `build_tools/github_actions/fetch_test_configurations.py` | Configuration → Matrix JSON |
+| `build_tools/github_actions/test_executable_scripts/test_runner.py` | Generic test executor |
+| `.github/workflows/test_component.yml` | Reusable matrix workflow |
+| `tests/amdgpu_family_matrix.py` | Runner pool configuration |
 
 ---
 
-## Design Highlights
+## Summary
 
-### Why It's Powerful
+**Three Simple Concepts:**
 
-1. **Separation of Concerns**
-   - Test authors focus on tests
-   - Infrastructure teams focus on hardware
-   - GitHub handles everything in between
+1. **Configure tests once** in `test_matrix`
+2. **Label tests** with categories and GPUs
+3. **GitHub handles the rest** (jobs, dispatch, parallelism)
 
-2. **Configuration Over Code**
-   - `test_matrix` is pure data
-   - No procedural job creation code
-   - Easy to validate and modify
-
-3. **Automatic Parallelization**
-   - Configure `total_shards: 6`
-   - Get 6 parallel jobs automatically
-   - Linear speedup with more runners
-
-4. **Zero Manual Dispatch**
-   - No job assignment code
-   - No runner selection logic
-   - GitHub Actions matches jobs to runners
-
-5. **Independent Scaling**
-   - Add runners → More capacity
-   - Adjust weights → Load balancing
-   - No test changes needed
-
-### What Makes It Extensible
-
-- **Generic runner**: Works for any component with CTest labels
-- **Label convention**: Simple contract, widely applicable
-- **Configuration-driven**: Add component = add dict entry
-- **Matrix expansion**: Automatic from configuration
-- **Infrastructure abstraction**: Tests don't know about runners
-
----
-
-## Getting Help
-
-1. Check [Quick Reference](quick_reference.md) for common tasks
-2. Review [Diagrams](test_harness_diagrams.md) for visual explanation
-3. Read [Configuration-Driven Matrix](configuration_driven_matrix.md) for orchestration details
-4. Consult [Architecture](test_harness_architecture.md) for comprehensive reference
-
-For specific issues:
-- Test not running? → [Quick Reference - Troubleshooting](quick_reference.md#troubleshooting)
-- Adding component? → [Quick Reference - Adding New Component](quick_reference.md#adding-a-new-component)
-- Understanding flow? → [Diagrams - End-to-End Flow](test_harness_diagrams.md#5-end-to-end-flow-one-picture)
-- Configuration questions? → [Configuration-Driven Matrix](configuration_driven_matrix.md)
-
----
-
-## Feedback
-
-This documentation is maintained by the TheRock integration team. For corrections, improvements, or questions:
-- Open an issue in the TheRock repository
-- Submit a PR with documentation updates
-- Contact the integration team
-
----
-
-**Last Updated:** 2026-06-21
+No job dispatch code. No runner management. Just configuration and labels.
