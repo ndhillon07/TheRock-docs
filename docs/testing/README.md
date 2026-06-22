@@ -84,30 +84,39 @@ Configuration defines tests. Labels define runners. GitHub dispatches automatica
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                    GITHUB SCHEDULER (AUTOMATIC)                          │
 │ ───────────────────────────────────────────────────────────────         │
-│ Matches jobs to available runners based on "runs-on" label              │
+│ Continuously matches jobs to runners based on "runs-on" label           │
 │                                                                          │
-│ Job Queue:                                                               │
-│ • rocblas 1/6 (needs: linux-gfx1100-pool-A)                             │
-│ • rocblas 2/6 (needs: linux-gfx1100-pool-A)                             │
-│ • rocblas 3/6 (needs: linux-gfx1100-pool-A)                             │
-│ • rocblas 4/6 (needs: linux-gfx1100-pool-A)                             │
-│ • rocblas 5/6 (needs: linux-gfx1100-pool-A)                             │
-│ • rocblas 6/6 (needs: linux-gfx1100-pool-A)                             │
+│ Job Queue (6 jobs waiting):                                             │
+│ ┌──────────────────────────────────────────────────────────────┐       │
+│ │ • rocblas 1/6 (needs: linux-gfx1100-pool-A) ────→ Running    │       │
+│ │ • rocblas 2/6 (needs: linux-gfx1100-pool-A) ────→ Running    │       │
+│ │ • rocblas 3/6 (needs: linux-gfx1100-pool-A) ────→ Running    │       │
+│ │ • rocblas 4/6 (needs: linux-gfx1100-pool-A) ────→ Queued     │       │
+│ │ • rocblas 5/6 (needs: linux-gfx1100-pool-A) ────→ Queued     │       │
+│ │ • rocblas 6/6 (needs: linux-gfx1100-pool-A) ────→ Queued     │       │
+│ └──────────────────────────────────────────────────────────────┘       │
 │                                      ↓                                   │
-│                         GitHub matches to runners                        │
+│                         Matched to available runners                     │
 │                                      ↓                                   │
-│ Available Runners:                                                       │
-│ linux-gfx1100-pool-A: [Runner1✓, Runner2✓, Runner3✓, Runner4, ...]     │
-│ linux-gfx1100-pool-B: [Runner1, Runner2, Runner3, ...]                 │
+│ Runner Pools:                                                            │
+│ ┌──────────────────────────────────────────────────────────────┐       │
+│ │ linux-gfx1100-pool-A (70% weight):                           │       │
+│ │   Runner1: [Running job 1/6] ──→ Finishes ──→ Takes job 4/6  │       │
+│ │   Runner2: [Running job 2/6] ──→ Finishes ──→ Takes job 5/6  │       │
+│ │   Runner3: [Running job 3/6] ──→ Finishes ──→ Takes job 6/6  │       │
+│ │   Runner4: [Idle] ──────────────→ Available for next job     │       │
+│ │                                                               │       │
+│ │ linux-gfx1100-pool-B (30% weight):                           │       │
+│ │   Runner1: [Idle] ──────────────→ Available for next job     │       │
+│ │   Runner2: [Idle] ──────────────→ Available for next job     │       │
+│ └──────────────────────────────────────────────────────────────┘       │
 │                                                                          │
-│ ✓ = Currently running a job                                             │
-│                                                                          │
-│ GitHub automatically:                                                    │
-│ • Finds idle runners with matching label                                │
-│ • Assigns jobs to runners (respects weights 70%/30%)                    │
-│ • Handles queuing when runners busy                                     │
-│ • Retries on failure                                                    │
-│ • NO MANUAL DISPATCH CODE                                               │
+│ Dynamic Behavior:                                                        │
+│ • Runners execute job → finish → immediately pick up next queued job    │
+│ • GitHub continuously matches queued jobs to free runners                │
+│ • No manual intervention - fully automatic job dispatch                  │
+│ • Load balancing: 70% of jobs → pool-A, 30% → pool-B (per weights)     │
+│ • Queue drains as runners complete jobs and take new ones                │
 └──────────────────────────────┬──────────────────────────────────────────┘
                                │
                                │ Jobs executing on runners
