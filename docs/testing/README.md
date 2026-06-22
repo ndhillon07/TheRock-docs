@@ -233,6 +233,290 @@ Each job runs:
 
 ---
 
+## Framework Agnostic: Plug and Play
+
+The harness is **framework agnostic** - it just runs whatever `test_script` you specify. Use CTest, pytest, custom scripts, anything.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                  Workflow (Same for All)                     │
+│                                                              │
+│  1. Set environment variables                                │
+│  2. Run: ${{ test_script }}                                 │
+│  3. Check exit code                                          │
+└─────────────────────────────────────────────────────────────┘
+                           │
+                           │ test_script can be anything
+                           │
+        ┌──────────────────┼──────────────────┐
+        │                  │                  │
+        ▼                  ▼                  ▼
+   ┌─────────┐        ┌─────────┐      ┌──────────┐
+   │ CTest   │        │ pytest  │      │  Custom  │
+   │ runner  │        │         │      │  script  │
+   └─────────┘        └─────────┘      └──────────┘
+        │                  │                  │
+        │                  │                  │
+   Your tests        Your tests         Your tests
+   Any framework!    Any framework!     Any framework!
+```
+
+### Different Test Frameworks
+
+```python
+test_matrix = {
+    # CTest-based (generic runner)
+    "rocblas": {
+        "test_script": "python .../test_runner.py",  # Uses CTest
+    },
+    
+    # Pytest-based
+    "rccl": {
+        "test_script": "pytest .../test_rccl.py -v -s",  # Uses pytest
+    },
+    
+    # Custom script
+    "rocfft": {
+        "test_script": "python .../test_rocfft.py",  # Custom logic
+    },
+    
+    # Shell script
+    "custom": {
+        "test_script": "bash .../run_custom_tests.sh",  # Bash script
+    },
+}
+```
+
+**The workflow doesn't care** - it just executes `test_script` and checks the exit code.
+
+### Per-Component Custom Settings
+
+Each component can have unique configuration:
+
+```python
+test_matrix = {
+    "rocblas": {
+        "test_script": "python .../test_runner.py",
+        "timeout_minutes": 288,
+        "total_shards_dict": {"linux": 6},
+        
+        # Custom container for this component only
+        "container_image": "ghcr.io/rocm/rocblas_image@sha256:...",
+        
+        # Additional container options
+        "container_options": ["--cap-add=SYS_PTRACE"],
+        
+        # Python requirements for this test
+        "additional_requirements_files": [
+            "share/rocblas/requirements.txt",
+        ],
+        
+        # Exclude specific GPUs
+        "exclude_family": {
+            "linux": ["gfx1150", "gfx1151"],
+        },
+        
+        # Require multi-GPU
+        "multi_gpu": {"linux": ["gfx94X-dcgpu"]},
+    },
+}
+```
+
+### Per-Component Environment & Paths
+
+**File**: `test_runner.py` (for CTest-based tests)
+
+```python
+COMPONENT_OVERRIDES = {
+    "rocprofiler-compute": {
+        # Custom test directory
+        "test_dir": ["libexec", "rocprofiler-compute"],
+        
+        # Additional environment paths (relative to ROCM_PATH)
+        "additional_env_paths": {
+            "PATH": [["bin"]],
+            "LD_LIBRARY_PATH": [["lib"], ["lib", "rocm_sysdeps", "lib"]],
+        },
+    },
+    
+    "rocwmma": {
+        # Different test directory based on TEST_TYPE
+        "test_dir_by_type": {
+            "quick": ["bin", "rocwmma", "regression"],
+            "standard": ["bin", "rocwmma"],
+        },
+    },
+    
+    "rocroller": {
+        # Paths from build tree (not install tree)
+        "env_prepend_from_therock": {
+            "LD_LIBRARY_PATH": [
+                ["build", "math-libs", "BLAS", "rocRoller", "dist", "lib"],
+            ],
+        },
+    },
+}
+```
+
+### Custom Test Scripts
+
+Write your own test script for complete control:
+
+**Example**: `test_executable_scripts/test_my_component.py`
+
+```python
+#!/usr/bin/env python3
+import os
+import subprocess
+
+# Read environment (set by workflow)
+component = os.getenv("TEST_COMPONENT")
+shard_index = int(os.getenv("SHARD_INDEX", 1))
+total_shards = int(os.getenv("TOTAL_SHARDS", 1))
+test_type = os.getenv("TEST_TYPE", "standard")
+
+# Custom logic for your component
+if test_type == "quick":
+    tests = ["smoke_test"]
+elif test_type == "standard":
+    tests = ["unit_tests", "integration_tests"]
+else:
+    tests = ["all_tests"]
+
+# Shard tests your way
+my_shard = tests[shard_index - 1::total_shards]
+
+# Run with your framework
+for test in my_shard:
+    result = subprocess.run(
+        ["my_test_runner", "--test", test],
+        check=False
+    )
+    if result.returncode != 0:
+        sys.exit(1)
+
+print(f"All tests passed for shard {shard_index}/{total_shards}")
+```
+
+**Use it**:
+
+```python
+test_matrix = {
+    "my-component": {
+        "test_script": "python .../test_my_component.py",
+        "total_shards_dict": {"linux": 4},
+    },
+}
+```
+
+### Environment Variables Available to Scripts
+
+All test scripts receive:
+
+```bash
+# Component info
+TEST_COMPONENT=rocblas          # Which component
+TEST_TYPE=standard              # Test category
+
+# Sharding
+SHARD_INDEX=2                   # Current shard (1-indexed)
+TOTAL_SHARDS=6                  # Total shards
+
+# GPU info
+AMDGPU_FAMILIES=gfx1100        # Target GPU
+
+# Paths
+THEROCK_BIN_DIR=./build/dist/rocm/bin
+ROCM_PATH=./build/dist/rocm
+
+# GTest (if applicable)
+GTEST_SHARD_INDEX=1            # 0-indexed
+GTEST_TOTAL_SHARDS=6
+```
+
+### Plug and Play: Adding New Framework
+
+**Step 1**: Write test script for your framework
+
+```python
+# test_executable_scripts/test_with_my_framework.py
+import my_test_framework
+
+def main():
+    component = os.getenv("TEST_COMPONENT")
+    shard = int(os.getenv("SHARD_INDEX"))
+    total = int(os.getenv("TOTAL_SHARDS"))
+    
+    # Use your framework
+    runner = my_test_framework.Runner(component)
+    runner.shard(shard, total)
+    runner.run()
+
+if __name__ == "__main__":
+    main()
+```
+
+**Step 2**: Add to test_matrix
+
+```python
+test_matrix = {
+    "my-component": {
+        "test_script": "python .../test_with_my_framework.py",
+        "total_shards_dict": {"linux": 4},
+    },
+}
+```
+
+**Done!** The workflow doesn't care what framework you use.
+
+### Real Examples from TheRock
+
+```python
+# CTest-based (generic)
+"rocblas": {
+    "test_script": f"python {_get_script_path('test_runner.py')}",
+},
+
+# Pytest-based
+"rccl": {
+    "test_script": f"pytest {_get_script_path('test_rccl.py')} -v -s",
+},
+
+# Custom Python script
+"amdsmi": {
+    "test_script": f"python {_get_script_path('test_amdsmi.py')}",
+},
+
+# Custom with special handling
+"hipfft": {
+    "test_script": f"python {_get_script_path('test_hipfft.py')}",
+    "additional_requirements_files": ["share/hipfft/requirements.txt"],
+},
+```
+
+### Why This Works
+
+**Workflow is simple**:
+
+```yaml
+- name: Test
+  run: ${{ fromJSON(inputs.component).test_script }}
+```
+
+That's it! The workflow:
+- Sets environment variables
+- Runs your script
+- Checks exit code (0 = pass, non-zero = fail)
+
+**Your script**:
+- Reads environment variables
+- Runs tests however you want
+- Returns exit code
+
+**Result**: Any test framework works!
+
+---
+
 ## Adding a New Component
 
 ### Step 1: Write Tests with Labels
@@ -541,10 +825,17 @@ ctest --print-labels
 
 ## Summary
 
-**Three Simple Concepts:**
+**Four Simple Concepts:**
 
-1. **Configure tests once** in `test_matrix`
-2. **Label tests** with categories and GPUs
-3. **GitHub handles the rest** (jobs, dispatch, parallelism)
+1. **Configure tests once** in `test_matrix` (any test framework)
+2. **Write test script** (CTest, pytest, custom - anything)
+3. **Label runner pools** (infrastructure manages capacity)
+4. **GitHub handles the rest** (jobs, dispatch, parallelism)
 
-No job dispatch code. No runner management. Just configuration and labels.
+**Plug and Play:**
+- Any test framework works (CTest, pytest, custom)
+- Any custom settings per component
+- Any environment configuration
+- Just set `test_script` and environment variables
+
+No job dispatch code. No runner management. Just configuration.
