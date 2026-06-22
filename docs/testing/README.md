@@ -162,14 +162,14 @@ Total: 10 parallel jobs (automatic!)
 
 ### 4. Runner Pools & Dispatch
 
-**File**: `tests/amdgpu_family_matrix.py`
+**File**: `build_tools/github_actions/amdgpu_family_matrix.py`
 
 ```python
 "gfx1100": {
     "linux": {
         "test-runs-on-labels": [
-            {"label": "gfx1100-pool-A", "weight": 70},  # 70% of jobs
-            {"label": "gfx1100-pool-B", "weight": 30},  # 30% of jobs
+            {"label": "gfx1100-pool-A", "weight": 0.70},  # 70% of jobs
+            {"label": "gfx1100-pool-B", "weight": 0.30},  # 30% of jobs
         ]
     }
 }
@@ -668,14 +668,14 @@ COMPONENT_DIR_MAPPING = {
 
 ### Configure Load Balancing
 
-**In `tests/amdgpu_family_matrix.py`**:
+**In `build_tools/github_actions/amdgpu_family_matrix.py`**:
 
 ```python
 "gfx1100": {
     "linux": {
         "test-runs-on-labels": [
-            {"label": "gfx1100-pool-A", "weight": 70},
-            {"label": "gfx1100-pool-B", "weight": 30},
+            {"label": "gfx1100-pool-A", "weight": 0.70},
+            {"label": "gfx1100-pool-B", "weight": 0.30},
         ]
     }
 }
@@ -891,14 +891,72 @@ ctest --print-labels
 
 ---
 
+## Two Key Configuration Files
+
+### Why Two Files?
+
+**Separation of Concerns**: Test configuration and infrastructure management are independent.
+
+| File | Purpose | Managed By | Changes When |
+|------|---------|------------|--------------|
+| **fetch_test_configurations.py** | **WHAT to test** | Test engineers | Add component, adjust shards, change timeouts |
+| **amdgpu_family_matrix.py** | **WHERE to test** | Infrastructure team | Add runners, adjust load balancing, new GPU families |
+
+### How They Work Together
+
+```
+Environment: AMDGPU_FAMILIES=gfx1100
+
+Step 1: fetch_test_configurations.py
+  → "rocblas needs 6 shards for gfx1100"
+
+Step 2: amdgpu_family_matrix.py
+  → Lookup gfx1100 → Runner labels: [pool-A: 70%, pool-B: 30%]
+  → Select weighted: "linux-gfx1100-pool-A"
+
+Result:
+  {
+    "job_name": "rocblas",
+    "shard_arr": [1,2,3,4,5,6],
+    "test_runner": "linux-gfx1100-pool-A"  ← From amdgpu_family_matrix.py
+  }
+
+GitHub Actions:
+  → Creates 6 jobs, all with runs-on: linux-gfx1100-pool-A
+```
+
+### Example: Infrastructure Scales Independently
+
+**Infra team adds 10 new gfx1100 machines:**
+
+```python
+# amdgpu_family_matrix.py - ONLY THIS CHANGES
+"gfx1100": {
+    "linux": {
+        "test-runs-on-labels": [
+            {"label": "pool-A", "weight": 0.50},  # Reduced from 0.70
+            {"label": "pool-B", "weight": 0.30},  # Same
+            {"label": "pool-C", "weight": 0.20},  # NEW!
+        ]
+    }
+}
+
+# fetch_test_configurations.py - NO CHANGES NEEDED
+# Test engineers don't need to know about new pool!
+```
+
+**Result**: Jobs automatically distribute 50%/30%/20% across pools A/B/C
+
+---
+
 ## Files Reference
 
 | File | Purpose |
 |------|---------|
-| `build_tools/github_actions/fetch_test_configurations.py` | Configuration → Matrix JSON |
+| `build_tools/github_actions/fetch_test_configurations.py` | Test configuration (WHAT to test) |
+| `build_tools/github_actions/amdgpu_family_matrix.py` | Runner pools & load balancing (WHERE to test) |
 | `build_tools/github_actions/test_executable_scripts/test_runner.py` | Generic test executor |
 | `.github/workflows/test_component.yml` | Reusable matrix workflow |
-| `tests/amdgpu_family_matrix.py` | Runner pool configuration |
 
 ---
 
