@@ -33,7 +33,11 @@ Configuration defines tests. Labels define runners. GitHub dispatches automatica
 │   • Different test scripts       │    │                                 │
 └──────────────┬───────────────────┘    └──────────────┬──────────────────┘
                │                                       │
-               │ Generates JSON                        │ Provides labels
+               │ Generates JSON                        │ Provides labels + weights
+               │                                       │
+               │ Script uses weights to select label:  │
+               │ • 70% chance → pool-A                 │
+               │ • 30% chance → pool-B                 │
                ▼                                       ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                    COMBINED CONFIGURATION (JSON)                         │
@@ -43,20 +47,21 @@ Configuration defines tests. Labels define runners. GitHub dispatches automatica
 │     {                                                                    │
 │       "job_name": "rocblas",                                             │
 │       "shard_arr": [1, 2, 3, 4, 5, 6],        ← 6 parallel jobs         │
-│       "test_runner": "linux-gfx1100-pool-A",  ← runs-on label           │
+│       "test_runner": "linux-gfx1100-pool-A",  ← Selected via 70% weight │
 │       "timeout_minutes": 288,                                            │
 │       "test_script": "python test_runner.py"                             │
 │     },                                                                   │
 │     {                                                                    │
 │       "job_name": "miopen",                                              │
 │       "shard_arr": [1, 2, 3, 4],              ← 4 parallel jobs         │
-│       "test_runner": "linux-gfx1100-pool-A",  ← Same label              │
+│       "test_runner": "linux-gfx1100-pool-B",  ← Selected via 30% weight │
 │       "timeout_minutes": 120,                                            │
 │       "test_script": "pytest test_miopen.py"                             │
 │     }                                                                    │
 │   ]                                                                      │
 │ }                                                                        │
 │                                                                          │
+│ Label selection done by config script (not GitHub)                       │
 │ Total: 10 parallel jobs (6 rocblas + 4 miopen)                          │
 └──────────────────────────────┬──────────────────────────────────────────┘
                                │
@@ -67,66 +72,60 @@ Configuration defines tests. Labels define runners. GitHub dispatches automatica
 │ ───────────────────────────────────────────────────────────────         │
 │ GitHub creates 10 parallel jobs from 2 components:                       │
 │                                                                          │
-│ rocblas (6 shards):                                                      │
+│ rocblas (6 shards) → All use pool-A:                                    │
 │ ┌───────────────────────────┐ ┌───────────────────────────┐            │
 │ │ Job: rocblas 1/6          │ │ Job: rocblas 2/6          │            │
 │ │ runs-on:                  │ │ runs-on:                  │            │
 │ │ linux-gfx1100-pool-A      │ │ linux-gfx1100-pool-A      │            │
 │ └───────────────────────────┘ └───────────────────────────┘            │
-│ ... (rocblas 3/6, 4/6, 5/6, 6/6)                                        │
+│ ... (rocblas 3/6, 4/6, 5/6, 6/6 all use pool-A)                         │
 │                                                                          │
-│ miopen (4 shards):                                                       │
+│ miopen (4 shards) → All use pool-B:                                     │
 │ ┌───────────────────────────┐ ┌───────────────────────────┐            │
 │ │ Job: miopen 1/4           │ │ Job: miopen 2/4           │            │
 │ │ runs-on:                  │ │ runs-on:                  │            │
-│ │ linux-gfx1100-pool-A      │ │ linux-gfx1100-pool-A      │            │
+│ │ linux-gfx1100-pool-B      │ │ linux-gfx1100-pool-B      │            │
 │ └───────────────────────────┘ └───────────────────────────┘            │
-│ ... (miopen 3/4, 4/4)                                                   │
+│ ... (miopen 3/4, 4/4 use pool-B)                                        │
 └──────────────────────────────┬──────────────────────────────────────────┘
                                │
-                               │ All 10 jobs request: runs-on: linux-gfx1100-pool-A
+                               │ 6 jobs → pool-A, 4 jobs → pool-B
                                ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                    GITHUB SCHEDULER (AUTOMATIC)                          │
 │ ───────────────────────────────────────────────────────────────         │
-│ Continuously matches jobs to runners based on "runs-on" label           │
+│ Matches jobs to runners based on exact "runs-on" label                  │
+│ (GitHub doesn't do load balancing - just matches label to runner)       │
 │                                                                          │
-│ Job Queue (10 jobs, multiple tests):                                    │
-│ ┌──────────────────────────────────────────────────────────────┐       │
-│ │ • rocblas 1/6 (needs: linux-gfx1100-pool-A) ───→ Running     │       │
-│ │ • rocblas 2/6 (needs: linux-gfx1100-pool-A) ───→ Running     │       │
-│ │ • miopen 1/4  (needs: linux-gfx1100-pool-A) ───→ Running     │       │
-│ │ • miopen 2/4  (needs: linux-gfx1100-pool-A) ───→ Queued      │       │
-│ │ • rocblas 3/6 (needs: linux-gfx1100-pool-A) ───→ Queued      │       │
-│ │ • rocblas 4/6 (needs: linux-gfx1100-pool-A) ───→ Queued      │       │
-│ │ • miopen 3/4  (needs: linux-gfx1100-pool-A) ───→ Queued      │       │
-│ │ • rocblas 5/6 (needs: linux-gfx1100-pool-A) ───→ Queued      │       │
-│ │ • miopen 4/4  (needs: linux-gfx1100-pool-A) ───→ Queued      │       │
-│ │ • rocblas 6/6 (needs: linux-gfx1100-pool-A) ───→ Queued      │       │
-│ └──────────────────────────────────────────────────────────────┘       │
-│                                      ↓                                   │
-│                         Matched to available runners                     │
-│                                      ↓                                   │
-│ Runner Pools:                                                            │
-│ ┌──────────────────────────────────────────────────────────────┐       │
-│ │ linux-gfx1100-pool-A (70% weight):                           │       │
-│ │   Runner1: [rocblas 1/6] ──→ Finishes ──→ Takes miopen 2/4   │       │
-│ │   Runner2: [rocblas 2/6] ──→ Finishes ──→ Takes rocblas 3/6  │       │
-│ │   Runner3: [miopen 1/4]  ──→ Finishes ──→ Takes rocblas 4/6  │       │
-│ │   Runner4: [Idle] ───────────────────────→ Takes next job    │       │
-│ │                                                               │       │
-│ │ linux-gfx1100-pool-B (30% weight):                           │       │
-│ │   Runner1: [Idle] ───────────────────────→ Available         │       │
-│ │   Runner2: [Idle] ───────────────────────→ Available         │       │
-│ └──────────────────────────────────────────────────────────────┘       │
+│ Job Queue A (6 rocblas jobs):    Job Queue B (4 miopen jobs):           │
+│ ┌───────────────────────────┐    ┌───────────────────────────┐         │
+│ │ • rocblas 1/6 → Running   │    │ • miopen 1/4 → Running    │         │
+│ │ • rocblas 2/6 → Running   │    │ • miopen 2/4 → Running    │         │
+│ │ • rocblas 3/6 → Queued    │    │ • miopen 3/4 → Queued     │         │
+│ │ • rocblas 4/6 → Queued    │    │ • miopen 4/4 → Queued     │         │
+│ │ • rocblas 5/6 → Queued    │    └───────────────────────────┘         │
+│ │ • rocblas 6/6 → Queued    │                                           │
+│ └───────────────────────────┘                                           │
+│         ↓                                  ↓                             │
+│   Matched to pool-A              Matched to pool-B                       │
+│         ↓                                  ↓                             │
+│ ┌──────────────────────────┐    ┌──────────────────────────┐           │
+│ │ linux-gfx1100-pool-A:    │    │ linux-gfx1100-pool-B:    │           │
+│ │   Runner1: [rocblas 1/6] │    │   Runner1: [miopen 1/4]  │           │
+│ │      → Finishes          │    │      → Finishes          │           │
+│ │      → Takes rocblas 3/6 │    │      → Takes miopen 3/4  │           │
+│ │   Runner2: [rocblas 2/6] │    │   Runner2: [miopen 2/4]  │           │
+│ │      → Finishes          │    │      → Finishes          │           │
+│ │      → Takes rocblas 4/6 │    │      → Takes miopen 4/4  │           │
+│ │   Runner3: [Idle]        │    └──────────────────────────┘           │
+│ └──────────────────────────┘                                            │
 │                                                                          │
-│ Dynamic Behavior:                                                        │
-│ • Handles MULTIPLE test components simultaneously                        │
-│ • Different tests (rocblas, miopen) share same runner pools              │
-│ • Runners execute ANY job from queue → finish → take next               │
-│ • GitHub continuously matches queued jobs to free runners                │
-│ • Load balancing: 70% → pool-A, 30% → pool-B (across all tests)        │
-│ • Queue drains as runners cycle through mixed job types                  │
+│ Key Points:                                                              │
+│ • Config script selected labels (pool-A for rocblas, pool-B for miopen) │
+│ • GitHub just matches: jobs needing pool-A → pool-A runners             │
+│ •                      jobs needing pool-B → pool-B runners             │
+│ • Runners pick up next job from THEIR pool's queue                      │
+│ • NO cross-pool assignment (pool-A runners don't take pool-B jobs)     │
 └──────────────────────────────┬──────────────────────────────────────────┘
                                │
                                │ Jobs executing on runners
