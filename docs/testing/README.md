@@ -16,16 +16,19 @@ Configuration defines tests. Labels define runners. GitHub dispatches automatica
 │ ─────────────────────────────    │    │ ───────────────────────         │
 │ test_matrix = {                  │    │ "gfx1100": {                    │
 │   "rocblas": {                   │    │   "test-runs-on-labels": [      │
-│     "total_shards": 6,           │    │     {"label": "pool-A",         │
-│     "timeout": 288,              │    │      "weight": 0.70},           │
-│     "test_script": "...",        │    │     {"label": "pool-B",         │
-│   }                              │    │      "weight": 0.30}            │
-│ }                                │    │   ]                             │
-│                                  │    │ }                               │
-│ Defines: WHAT to test            │    │ Defines: WHERE to run           │
-│   • Components                   │    │   • Runner labels               │
-│   • Parallelism (shards)         │    │   • Load balancing              │
-│   • Test scripts                 │    │   • GPU architectures           │
+│     "total_shards": 6,           │    │     {"label":                   │
+│     "timeout": 288,              │    │      "linux-gfx1100-pool-A",    │
+│     "test_script": "...",        │    │      "weight": 0.70},           │
+│   }                              │    │     {"label":                   │
+│ }                                │    │      "linux-gfx1100-pool-B",    │
+│                                  │    │      "weight": 0.30}            │
+│ Defines: WHAT to test            │    │   ]                             │
+│   • Components                   │    │ }                               │
+│   • Parallelism (shards)         │    │                                 │
+│   • Test scripts                 │    │ Defines: WHERE to run           │
+│                                  │    │   • Runner labels               │
+│                                  │    │   • Load balancing              │
+│                                  │    │   • GPU architectures           │
 └──────────────┬───────────────────┘    └──────────────┬──────────────────┘
                │                                       │
                │ Generates JSON                        │ Provides labels
@@ -57,33 +60,47 @@ Configuration defines tests. Labels define runners. GitHub dispatches automatica
 │                                                                          │
 │ GitHub creates 6 parallel jobs:                                          │
 │                                                                          │
-│ ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐        │
-│ │ Job: rocblas 1/6 │ │ Job: rocblas 2/6 │ │ Job: rocblas 3/6 │        │
-│ │ runs-on:         │ │ runs-on:         │ │ runs-on:         │        │
-│ │ pool-A           │ │ pool-A           │ │ pool-A           │        │
-│ └──────────────────┘ └──────────────────┘ └──────────────────┘        │
+│ ┌───────────────────────────┐ ┌───────────────────────────┐            │
+│ │ Job: rocblas 1/6          │ │ Job: rocblas 2/6          │            │
+│ │ runs-on:                  │ │ runs-on:                  │            │
+│ │ linux-gfx1100-pool-A      │ │ linux-gfx1100-pool-A      │            │
+│ └───────────────────────────┘ └───────────────────────────┘            │
 │                                                                          │
-│ ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐        │
-│ │ Job: rocblas 4/6 │ │ Job: rocblas 5/6 │ │ Job: rocblas 6/6 │        │
-│ │ runs-on:         │ │ runs-on:         │ │ runs-on:         │        │
-│ │ pool-A           │ │ pool-A           │ │ pool-A           │        │
-│ └──────────────────┘ └──────────────────┘ └──────────────────┘        │
+│ ┌───────────────────────────┐ ┌───────────────────────────┐            │
+│ │ Job: rocblas 3/6          │ │ Job: rocblas 4/6          │            │
+│ │ runs-on:                  │ │ runs-on:                  │            │
+│ │ linux-gfx1100-pool-A      │ │ linux-gfx1100-pool-A      │            │
+│ └───────────────────────────┘ └───────────────────────────┘            │
+│                                                                          │
+│ ┌───────────────────────────┐ ┌───────────────────────────┐            │
+│ │ Job: rocblas 5/6          │ │ Job: rocblas 6/6          │            │
+│ │ runs-on:                  │ │ runs-on:                  │            │
+│ │ linux-gfx1100-pool-A      │ │ linux-gfx1100-pool-A      │            │
+│ └───────────────────────────┘ └───────────────────────────┘            │
 └──────────────────────────────┬──────────────────────────────────────────┘
                                │
-                               │ All jobs request: runs-on: pool-A
+                               │ All jobs request: runs-on: linux-gfx1100-pool-A
                                ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                    GITHUB SCHEDULER (AUTOMATIC)                          │
 │ ───────────────────────────────────────────────────────────────         │
 │ Matches jobs to available runners based on "runs-on" label              │
 │                                                                          │
-│ Queue:                          Available Runners:                       │
-│ • rocblas 1/6 (needs pool-A) ──→ Pool-A: [R1✓, R2✓, R3✓, R4, R5, ...]  │
-│ • rocblas 2/6 (needs pool-A) ──→         [R1 , R2 , R3 , R4✓, R5✓, ...] │
-│ • rocblas 3/6 (needs pool-A) ──→ Pool-B: [R1, R2, R3, ...]              │
-│ • rocblas 4/6 (needs pool-A)                                             │
-│ • rocblas 5/6 (needs pool-A)     ✓ = Currently running job              │
-│ • rocblas 6/6 (needs pool-A)                                             │
+│ Job Queue:                                                               │
+│ • rocblas 1/6 (needs: linux-gfx1100-pool-A)                             │
+│ • rocblas 2/6 (needs: linux-gfx1100-pool-A)                             │
+│ • rocblas 3/6 (needs: linux-gfx1100-pool-A)                             │
+│ • rocblas 4/6 (needs: linux-gfx1100-pool-A)                             │
+│ • rocblas 5/6 (needs: linux-gfx1100-pool-A)                             │
+│ • rocblas 6/6 (needs: linux-gfx1100-pool-A)                             │
+│                                      ↓                                   │
+│                         GitHub matches to runners                        │
+│                                      ↓                                   │
+│ Available Runners:                                                       │
+│ linux-gfx1100-pool-A: [Runner1✓, Runner2✓, Runner3✓, Runner4, ...]     │
+│ linux-gfx1100-pool-B: [Runner1, Runner2, Runner3, ...]                 │
+│                                                                          │
+│ ✓ = Currently running a job                                             │
 │                                                                          │
 │ GitHub automatically:                                                    │
 │ • Finds idle runners with matching label                                │
